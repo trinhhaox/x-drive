@@ -23,7 +23,7 @@ public final class Updater: ObservableObject {
     @Published public private(set) var isChecking: Bool = false
     @Published public private(set) var isInstalling: Bool = false
     @Published public private(set) var latestRelease: ReleaseItem?
-    @Published public private(set) var statusMessage: String = "Đang dùng phiên bản mới nhất (v0.3.14 • Build 40)"
+    @Published public private(set) var statusMessage: String = "Đang dùng phiên bản mới nhất (v0.3.15 • Build 41)"
     @Published public private(set) var installProgressMessage: String?
     @Published public var autoCheckEnabled: Bool = true
 
@@ -42,7 +42,7 @@ public final class Updater: ObservableObject {
         self.githubRepo = githubRepo
         self.currentVersion = currentVersion
             ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
-            ?? "0.3.14"
+            ?? "0.3.15"
         self.feedURL = feedURL
         self.publicEdKeyBase64 = publicEdKeyBase64
     }

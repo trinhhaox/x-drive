@@ -1,0 +1,20 @@
+{
+  "name": "xdrive-orbit-api",
+  "version": "0.3.15",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Workers + D1 + R2 Zero-Knowledge E2EE Cloud Drive Backend for XDrive (OrbitFS)",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "dev:local": "node src/devServer.ts",
+    "deploy": "wrangler deploy",
+    "db:init:local": "wrangler d1 execute xdrive-metadata --local --file=schema.sql",
+    "db:init:remote": "wrangler d1 execute xdrive-metadata --remote --file=schema.sql",
+    "test": "node --test test/worker.test.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250204.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^3.107.0"
+  }
+}

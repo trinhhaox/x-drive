@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import OrbitCore
 
@@ -5,6 +6,7 @@ import OrbitCore
 public final class AppModel: ObservableObject {
     public enum SidebarTab: String, CaseIterable, Identifiable {
         case home = "Trang chủ"
+        case files = "Quản lý Tệp"
         case search = "Tìm kiếm"
         case privacy = "Bảo mật E2EE"
         case settings = "Cài đặt"
@@ -14,6 +16,7 @@ public final class AppModel: ObservableObject {
         public var icon: String {
             switch self {
             case .home: return "externaldrive.fill.badge.icloud"
+            case .files: return "folder.fill"
             case .search: return "magnifyingglass"
             case .privacy: return "lock.shield.fill"
             case .settings: return "gearshape.fill"
@@ -54,6 +57,17 @@ public final class AppModel: ObservableObject {
     @Published public var lastCopiedShareURL: String?
     @Published public var recentErrorReports: [ErrorReportPayload] = []
 
+    // Interactive File Explorer State
+    @Published public var currentExplorerDirectoryID: UInt64 = DriveTree.rootID
+    @Published public var explorerItems: [DriveNode] = []
+    @Published public var explorerBreadcrumbs: [DriveNode] = []
+    @Published public var pinnedRemoteIDs: Set<String> = []
+
+    // Cloud Backend Endpoint State
+    @Published public var apiEndpointURL: String = ProcessInfo.processInfo.environment["ORBIT_API_URL"] ?? "http://127.0.0.1:8787"
+    @Published public var useLiveCloudflareBackend: Bool = false
+    @Published public var backendConnectionStatus: String = "Đang dùng Bộ mô phỏng Đám mây Cục bộ (LocalWireRemote)"
+
     public let localBackend = LocalWireRemote()
     public let keyManager = KeyManager(
         localStore: InMemorySecretStore(),
@@ -68,6 +82,7 @@ public final class AppModel: ObservableObject {
     public let deviceNotifier = DeviceNotifier()
     public private(set) var searchPanelController: SearchPanelController?
     private var ejectWatcher: EjectWatcher?
+    private var keyMonitor: Any?
 
     public init() {
         let locked = LockedRemote(inner: localBackend, keyManager: keyManager)
@@ -76,6 +91,7 @@ public final class AppModel: ObservableObject {
         let cacheSettings = SharedContainer.readCacheSettings()
         self.cacheLimitGB = Double(cacheSettings.limitBytes) / (1024 * 1024 * 1024)
         self.politeUploads = SharedContainer.readUploadSettings().polite
+        self.pinnedRemoteIDs = SharedContainer.readPinnedRemoteIDs()
 
         CrashReports.shared.start()
         self.searchPanelController = SearchPanelController(appModel: self)
@@ -84,10 +100,25 @@ public final class AppModel: ObservableObject {
         }
         self.recentErrorReports = ErrorReporter.shared.latestReports()
         self.updater.startAutomaticChecks()
+        registerKeyboardShortcut()
 
         Task {
             await bootstrapInitialFilesIfNeeded()
             refreshSnapshot()
+        }
+    }
+
+    private func registerKeyboardShortcut() {
+        // Shortcut: Command + Shift + K toggles Floating Spotlight Panel
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.modifierFlags.contains([.command, .shift]),
+               event.charactersIgnoringModifiers?.lowercased() == "k" {
+                Task { @MainActor in
+                    self?.toggleFloatingSearchPanel()
+                }
+                return nil
+            }
+            return event
         }
     }
 
@@ -115,8 +146,110 @@ public final class AppModel: ObservableObject {
         searchPanelController?.togglePanel()
     }
 
+    // MARK: - Explorer Navigation & File Actions
+
+    public func navigateExplorer(to directoryID: UInt64) {
+        currentExplorerDirectoryID = directoryID
+        Task {
+            _ = try? await drive.listDirectory(nodeID: directoryID)
+            rebuildExplorerState()
+        }
+    }
+
+    public func refreshCurrentExplorerDirectory() {
+        Task {
+            try? await drive.refreshDirectory(nodeID: currentExplorerDirectoryID)
+            SharedContainer.requestDriveRefresh(remoteID: drive.tree.node(id: currentExplorerDirectoryID)?.remoteID)
+            refreshSnapshot()
+        }
+    }
+
+    public func rebuildExplorerState() {
+        explorerItems = drive.tree.listChildren(of: currentExplorerDirectoryID)
+        var crumbs: [DriveNode] = []
+        var cursor: UInt64? = currentExplorerDirectoryID
+        var visited = Set<UInt64>()
+        while let cid = cursor, !visited.contains(cid), let node = drive.tree.node(id: cid) {
+            visited.insert(cid)
+            crumbs.insert(node, at: 0)
+            if cid == DriveTree.rootID { break }
+            cursor = node.parentID
+        }
+        explorerBreadcrumbs = crumbs
+    }
+
+    public func createExplorerFolder(name: String) {
+        Task {
+            _ = try? await drive.createItem(name: name, parentID: currentExplorerDirectoryID, kind: .directory)
+            refreshSnapshot()
+        }
+    }
+
+    public func renameExplorerNode(_ node: DriveNode, newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Task {
+            _ = try? await drive.renameItem(nodeID: node.id, newParentID: node.parentID, newName: trimmed)
+            refreshSnapshot()
+        }
+    }
+
+    public func deleteExplorerNode(_ node: DriveNode) {
+        Task {
+            try? await drive.removeItem(nodeID: node.id)
+            refreshSnapshot()
+        }
+    }
+
+    public func isNodePinned(_ node: DriveNode) -> Bool {
+        guard let remID = node.remoteID else { return false }
+        return pinnedRemoteIDs.contains(remID)
+    }
+
+    public func togglePinNode(_ node: DriveNode) {
+        guard let remID = node.remoteID else { return }
+        let nowPinned: Bool
+        if pinnedRemoteIDs.contains(remID) {
+            pinnedRemoteIDs.remove(remID)
+            nowPinned = false
+        } else {
+            pinnedRemoteIDs.insert(remID)
+            nowPinned = true
+            // Prefetch file into ChunkStore so it stays offline-ready
+            Task {
+                _ = try? await drive.readFile(nodeID: node.id, offset: 0, length: Int(min(node.size, UInt64(ZK.piece))))
+                refreshSnapshot()
+            }
+        }
+        SharedContainer.setPinned(remoteID: remID, pinned: nowPinned)
+        drive.chunkStore.setPinnedRemoteIDs(pinnedRemoteIDs)
+        refreshSnapshot()
+    }
+
+    public func createShareLinkForDriveNode(_ node: DriveNode) {
+        let searchNode = SearchIndex.Node(
+            id: node.id,
+            name: node.name,
+            relativePath: drive.tree.relativePath(of: node.id) ?? "/\(node.name)",
+            isDirectory: node.kind == .directory,
+            size: node.size,
+            modifiedAt: node.modifiedAt
+        )
+        createShareLink(for: searchNode)
+    }
+
+    public func createFileRequestForCurrentFolder() -> String {
+        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
+        let base = apiEndpointURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let url = "\(base)/r/\(token)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url, forType: .string)
+        return url
+    }
+
     public func createShareLink(for node: SearchIndex.Node) {
-        let baseShare = URL(string: "https://www.helumi.app/s/\(UUID().uuidString.prefix(10).lowercased())")!
+        let base = apiEndpointURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let baseShare = URL(string: "\(base)/s/\(UUID().uuidString.prefix(10).lowercased())")!
         if let keys = keyManager.keys {
             let secrets = ZK.newFileSecrets()
             if let pkg = try? ShareMaker.makeEncryptedShareURL(
@@ -136,6 +269,26 @@ public final class AppModel: ObservableObject {
         lastCopiedShareURL = baseShare.absoluteString
     }
 
+    public func testCloudflareBackendConnection() {
+        guard let url = URL(string: apiEndpointURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/app/appcast.xml") else {
+            backendConnectionStatus = "URL không hợp lệ."
+            return
+        }
+        backendConnectionStatus = "Đang kiểm tra kết nối tới \(url.host ?? apiEndpointURL)..."
+        Task {
+            do {
+                let (_, resp) = try await URLSession.shared.data(from: url)
+                if let http = resp as? HTTPURLResponse, (200..<500).contains(http.statusCode) {
+                    backendConnectionStatus = "Kết nối Cloudflare Worker thành công (HTTP \(http.statusCode))!"
+                } else {
+                    backendConnectionStatus = "Không nhận được phản hồi hợp lệ từ Worker."
+                }
+            } catch {
+                backendConnectionStatus = "Chưa kết nối được Worker (\(error.localizedDescription)) — Đang dùng LocalWireRemote."
+            }
+        }
+    }
+
     public func bootstrapInitialFilesIfNeeded() async {
         let rootChildren = (try? await drive.listDirectory(nodeID: DriveTree.rootID)) ?? []
         if rootChildren.isEmpty {
@@ -143,14 +296,14 @@ public final class AppModel: ObservableObject {
             let media = try? await drive.createItem(name: "Thiết kế & Video", parentID: DriveTree.rootID, kind: .directory)
             let readmeNode = try? await drive.createItem(name: "Helumi-Architecture-Notes.md", parentID: DriveTree.rootID, kind: .file)
             if let rn = readmeNode {
-                let sample = Data("# XDrive (OrbitFS + Zero-Knowledge E2EE)\nỔ đĩa đám mây tốc độ cao gắn tại /Volumes/Helumi.\n".utf8)
+                let sample = Data("# XDrive (OrbitFS + Zero-Knowledge E2EE)\nỔ đĩa đám mây tốc độ cao gắn tại /Volumes/Helumi.\n- Khối dữ liệu chuẩn: 1 MiB (1,048,576 bytes)\n- Mã hóa đầu cuối: AES-256-GCM + HKDF-SHA256 + P-256 ECDH\n".utf8)
                 _ = try? await drive.writeFile(nodeID: rn.id, data: sample, offset: 0)
                 await drive.closeFile(nodeID: rn.id)
             }
             if let docs {
                 let spec = try? await drive.createItem(name: "ZeroKnowledge-Protocol-Spec.pdf", parentID: docs.id, kind: .file)
                 if let spec {
-                    _ = try? await drive.writeFile(nodeID: spec.id, data: Data(repeating: 0x42, count: 64 * 1024), offset: 0)
+                    _ = try? await drive.writeFile(nodeID: spec.id, data: Data("PDF-1.7 Zero-Knowledge Specification Document\n".utf8), offset: 0)
                     await drive.closeFile(nodeID: spec.id)
                 }
             }
@@ -172,6 +325,7 @@ public final class AppModel: ObservableObject {
         privacyState = keyManager.state
         searchIndex.rebuild(from: drive.tree)
         performSearch()
+        rebuildExplorerState()
         refreshErrorReports()
     }
 
@@ -188,13 +342,13 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    public func dropFiles(_ urls: [URL]) {
+    public func dropFiles(_ urls: [URL], intoParentID parentID: UInt64 = DriveTree.rootID) {
         Task {
             for url in urls {
                 guard let data = try? Data(contentsOf: url) else { continue }
                 let created = try? await drive.createItem(
                     name: url.lastPathComponent,
-                    parentID: DriveTree.rootID,
+                    parentID: parentID,
                     kind: .file
                 )
                 if let created {

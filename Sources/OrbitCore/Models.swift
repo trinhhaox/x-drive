@@ -9,7 +9,7 @@ public enum NodeKind: String, Codable, Sendable {
     case symlink
 }
 
-public struct DriveNode: Codable, Equatable, Sendable {
+public struct DriveNode: Codable, Equatable, Identifiable, Sendable {
     public var id: UInt64
     public var remoteID: String?
     public var parentID: UInt64

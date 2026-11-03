@@ -42,6 +42,8 @@ public struct MainWindowView: View {
                     switch model.selectedTab {
                     case .home:
                         HomeDashboardView(model: model)
+                    case .files:
+                        DriveExplorerView(model: model)
                     case .search:
                         SpotlightSearchView(model: model)
                     case .privacy:
@@ -449,6 +451,30 @@ public struct DriveSettingsView: View {
                     get: { model.politeUploads },
                     set: { model.updatePoliteUploads($0) }
                 ))
+                HStack {
+                    Text("Phím tắt Mở Spotlight Search Panel:")
+                    Spacer()
+                    Text("⌘ + ⇧ + K")
+                        .font(.system(.callout, design: .monospaced).bold())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+
+            Section("Máy chủ Đám mây Cloudflare Workers (OrbitAPI Endpoint)") {
+                HStack {
+                    TextField("URL Máy chủ API (VD: http://127.0.0.1:8787)", text: $model.apiEndpointURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                    Button("Kiểm tra Kết nối") {
+                        model.testCloudflareBackendConnection()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Text(model.backendConnectionStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Cập nhật Tự động từ GitHub Releases (trinhhaox/x-drive) & Tài khoản") {
