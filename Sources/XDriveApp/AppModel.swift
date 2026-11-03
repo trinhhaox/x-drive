@@ -83,6 +83,7 @@ public final class AppModel: ObservableObject {
             self?.driveController.refreshState()
         }
         self.recentErrorReports = ErrorReporter.shared.latestReports()
+        self.updater.startAutomaticChecks()
 
         Task {
             await bootstrapInitialFilesIfNeeded()

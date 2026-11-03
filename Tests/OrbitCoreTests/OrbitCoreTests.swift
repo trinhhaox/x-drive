@@ -261,5 +261,57 @@ final class OrbitCoreTests: XCTestCase {
         xattrs.set(nodeID: 42, name: "com.apple.FinderInfo", value: nil)
         XCTAssertNil(xattrs.get(nodeID: 42, name: "com.apple.FinderInfo"))
     }
+
+    func testGitHubReleaseVersionComparisonAndSHA256Verification() throws {
+        XCTAssertTrue(GitHubUpdateVerifier.isVersion("v0.3.14", newerThan: "0.3.13"))
+        XCTAssertTrue(GitHubUpdateVerifier.isVersion("0.4.0", newerThan: "v0.3.99"))
+        XCTAssertTrue(GitHubUpdateVerifier.isVersion("1.0.0", newerThan: "0.9.9"))
+        XCTAssertFalse(GitHubUpdateVerifier.isVersion("v0.3.13", newerThan: "0.3.13"))
+        XCTAssertFalse(GitHubUpdateVerifier.isVersion("0.3.12", newerThan: "0.3.13"))
+
+        let sampleReleaseJSON = """
+        {
+          "tag_name": "v0.3.14",
+          "name": "XDrive v0.3.14",
+          "body": "### Release Notes\\n- Faster FSKit streaming",
+          "html_url": "https://github.com/trinhhaox/x-drive/releases/tag/v0.3.14",
+          "prerelease": false,
+          "draft": false,
+          "assets": [
+            {
+              "name": "XDrive-0.3.14.dmg",
+              "browser_download_url": "https://github.com/trinhhaox/x-drive/releases/download/v0.3.14/XDrive-0.3.14.dmg",
+              "size": 1400000
+            },
+            {
+              "name": "XDrive-0.3.14-macos-arm64.zip",
+              "browser_download_url": "https://github.com/trinhhaox/x-drive/releases/download/v0.3.14/XDrive-0.3.14-macos-arm64.zip",
+              "size": 1200000
+            },
+            {
+              "name": "SHA256SUMS.txt",
+              "browser_download_url": "https://github.com/trinhhaox/x-drive/releases/download/v0.3.14/SHA256SUMS.txt",
+              "size": 192
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let info = try JSONDecoder().decode(GitHubReleaseInfo.self, from: sampleReleaseJSON)
+        XCTAssertEqual(info.cleanVersion, "0.3.14")
+        XCTAssertEqual(info.preferredAppArchiveAsset?.name, "XDrive-0.3.14-macos-arm64.zip")
+        XCTAssertEqual(info.sha256SumsAsset?.name, "SHA256SUMS.txt")
+
+        let payload = Data("fake-zip-archive-bytes".utf8)
+        let expectedHex = GitHubUpdateVerifier.sha256Hex(of: payload)
+        let sumsContent = """
+        \(expectedHex)  XDrive-0.3.14-macos-arm64.zip
+        bb8e7b2ff1cf3126307f2cc18b57ac9690ed04e196aeb8e941e1ae11cb5244ae  XDrive-0.3.14.dmg
+        """
+        XCTAssertEqual(
+            GitHubUpdateVerifier.expectedSHA256(for: "XDrive-0.3.14-macos-arm64.zip", in: sumsContent),
+            expectedHex
+        )
+    }
 }
 

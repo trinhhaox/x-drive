@@ -1,9 +1,10 @@
+import AppKit
 import CryptoKit
 import Foundation
 import SwiftUI
 import OrbitCore
 
-// MARK: - Updater (Sparkle-compatible EdDSA Appcast Update Checker)
+// MARK: - Updater (GitHub Releases + Sparkle EdDSA Auto-Updater)
 
 @MainActor
 public final class Updater: ObservableObject {
@@ -11,24 +12,56 @@ public final class Updater: ObservableObject {
         public let version: String
         public let buildNumber: Int
         public let downloadURL: URL
+        public let htmlURL: URL
+        public let sha256AssetURL: URL?
+        public let assetName: String
+        public let assetSize: Int64
         public let edSignature: String?
         public let releaseNotes: String
     }
 
     @Published public private(set) var isChecking: Bool = false
+    @Published public private(set) var isInstalling: Bool = false
     @Published public private(set) var latestRelease: ReleaseItem?
-    @Published public private(set) var statusMessage: String = "Đang dùng phiên bản mới nhất (0.3.13 • Build 39)"
+    @Published public private(set) var statusMessage: String = "Đang dùng phiên bản mới nhất (v0.3.14 • Build 40)"
+    @Published public private(set) var installProgressMessage: String?
+    @Published public var autoCheckEnabled: Bool = true
 
-    /// Default Ed25519 public key from Info.plist (`SUPublicEDKey`)
+    public let githubRepo: String
+    public let currentVersion: String
     public let publicEdKeyBase64: String
     public let feedURL: URL
+    private var periodicTask: Task<Void, Never>?
 
     public init(
+        githubRepo: String = "trinhhaox/x-drive",
+        currentVersion: String? = nil,
         feedURL: URL = URL(string: "http://127.0.0.1:8787/app/appcast.xml")!,
         publicEdKeyBase64: String = "8Bn8kmQovdDpAr/FS0irPBXfLHZzZeuwFlp9uF4DsC4="
     ) {
+        self.githubRepo = githubRepo
+        self.currentVersion = currentVersion
+            ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+            ?? "0.3.14"
         self.feedURL = feedURL
         self.publicEdKeyBase64 = publicEdKeyBase64
+    }
+
+    /// Starts automatic background check on launch and every 6 hours.
+    public func startAutomaticChecks() {
+        periodicTask?.cancel()
+        periodicTask = Task { [weak self] in
+            guard let self else { return }
+            if self.autoCheckEnabled {
+                await self.checkForUpdates(silent: true)
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 6 * 3600 * 1_000_000_000)
+                if self.autoCheckEnabled {
+                    await self.checkForUpdates(silent: true)
+                }
+            }
+        }
     }
 
     /// Verifies an Ed25519 (`EdDSA`) signature over update payload bytes.
@@ -45,33 +78,240 @@ public final class Updater: ObservableObject {
         return publicKey.isValidSignature(sigData, for: payload)
     }
 
-    public func checkForUpdates() async {
+    /// Queries GitHub Releases API (`https://api.github.com/repos/trinhhaox/x-drive/releases/latest`)
+    /// to detect any newer semantic version.
+    public func checkForUpdates(silent: Bool = false) async {
+        guard !isChecking else { return }
         isChecking = true
+        if !silent {
+            statusMessage = "Đang kiểm tra bản phát hành mới trên GitHub (\(githubRepo))..."
+        }
         defer { isChecking = false }
 
+        let apiURL = URL(string: "https://api.github.com/repos/\(githubRepo)/releases/latest")!
+        var request = URLRequest(url: apiURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("XDrive-macOS/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
+
         do {
-            let (data, response) = try await URLSession.shared.data(from: feedURL)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                  let xml = String(data: data, encoding: .utf8) else {
-                statusMessage = "Đã kiểm tra: Phiên bản 0.3.13 (39) là mới nhất."
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                statusMessage = "Đang dùng phiên bản v\(currentVersion) (Không thể kết nối GitHub Releases)."
                 return
             }
 
-            if xml.contains("sparkle:version=\"40\"") || xml.contains("0.3.14") {
+            let ghRelease = try JSONDecoder().decode(GitHubReleaseInfo.self, from: data)
+            guard !ghRelease.draft else {
+                statusMessage = "Bạn đang sử dụng phiên bản mới nhất (v\(currentVersion))."
+                return
+            }
+
+            let remoteVer = ghRelease.cleanVersion
+            if GitHubUpdateVerifier.isVersion(remoteVer, newerThan: currentVersion) {
+                let preferredAsset = ghRelease.preferredAppArchiveAsset
+                let downloadURL = preferredAsset?.browserDownloadURL ?? ghRelease.htmlURL
                 let item = ReleaseItem(
-                    version: "0.3.14",
-                    buildNumber: 40,
-                    downloadURL: URL(string: "https://github.com/trinhhaox/x-drive/releases/latest")!,
+                    version: remoteVer,
+                    buildNumber: 0,
+                    downloadURL: downloadURL,
+                    htmlURL: ghRelease.htmlURL,
+                    sha256AssetURL: ghRelease.sha256SumsAsset?.browserDownloadURL,
+                    assetName: preferredAsset?.name ?? "XDrive-\(remoteVer).dmg",
+                    assetSize: preferredAsset?.size ?? 0,
                     edSignature: nil,
-                    releaseNotes: "Tối ưu tốc độ đọc khối FSKit 1 MiB và cải thiện UploadGovernor."
+                    releaseNotes: ghRelease.body
                 )
-                latestRelease = item
-                statusMessage = "Có bản cập nhật mới: v\(item.version) (Build \(item.buildNumber))"
+                self.latestRelease = item
+                self.statusMessage = "Phát hiện bản phát hành mới trên GitHub: v\(remoteVer)!"
             } else {
-                statusMessage = "Bạn đang sử dụng phiên bản mới nhất (0.3.13 • Build 39)."
+                self.latestRelease = nil
+                self.statusMessage = "Bạn đang sử dụng phiên bản mới nhất trên GitHub (v\(currentVersion))."
             }
         } catch {
-            statusMessage = "Bạn đang sử dụng phiên bản mới nhất (0.3.13 • Build 39)."
+            if !silent {
+                statusMessage = "Bạn đang dùng phiên bản v\(currentVersion)."
+            }
+        }
+    }
+
+    /// Downloads the release asset from GitHub, verifies `SHA256SUMS.txt` if present,
+    /// extracts `.zip` (or mounts `.dmg`), replaces the app bundle, and relaunches XDrive.
+    public func downloadAndInstallUpdate() async {
+        guard let release = latestRelease, !isInstalling else { return }
+        isInstalling = true
+        installProgressMessage = "Đang tải gói cập nhật \(release.assetName) từ GitHub..."
+        defer { isInstalling = false }
+
+        do {
+            // 1. Download archive asset
+            let (archiveData, resp) = try await URLSession.shared.data(from: release.downloadURL)
+            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                installProgressMessage = "Lỗi tải xuống từ GitHub Releases."
+                return
+            }
+
+            // 2. Verify SHA-256 checksum against SHA256SUMS.txt if available
+            if let sumsURL = release.sha256AssetURL {
+                installProgressMessage = "Đang xác minh mã băm toàn vẹn SHA-256..."
+                if let (sumsData, sumsResp) = try? await URLSession.shared.data(from: sumsURL),
+                   let sumsHttp = sumsResp as? HTTPURLResponse, sumsHttp.statusCode == 200,
+                   let sumsText = String(data: sumsData, encoding: .utf8),
+                   let expectedHash = GitHubUpdateVerifier.expectedSHA256(for: release.assetName, in: sumsText) {
+                    let actualHash = GitHubUpdateVerifier.sha256Hex(of: archiveData)
+                    guard actualHash == expectedHash else {
+                        installProgressMessage = "Cảnh báo bảo mật: SHA-256 không khớp (\(actualHash.prefix(12)) != \(expectedHash.prefix(12)))."
+                        ErrorReporter.shared.report(
+                            component: "Updater",
+                            code: "sha256_mismatch",
+                            message: "GitHub update SHA-256 mismatch for \(release.assetName)"
+                        )
+                        return
+                    }
+                }
+            }
+
+            // 3. Stage update in temporary folder
+            let stagingRoot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("XDriveUpdate-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+            let archiveFile = stagingRoot.appendingPathComponent(release.assetName)
+            try archiveData.write(to: archiveFile, options: .atomic)
+
+            if release.assetName.lowercased().hasSuffix(".zip") {
+                installProgressMessage = "Đang giải nén gói ứng dụng XDrive.app..."
+                let unzipProc = Process()
+                unzipProc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                unzipProc.arguments = ["-x", "-k", archiveFile.path, stagingRoot.path]
+                try unzipProc.run()
+                unzipProc.waitUntilExit()
+
+                let extractedApp = stagingRoot.appendingPathComponent("XDrive.app")
+                guard FileManager.default.fileExists(atPath: extractedApp.path) else {
+                    NSWorkspace.shared.open(release.htmlURL)
+                    return
+                }
+
+                // 4. Verify code signature of extracted app
+                let signCheck = Process()
+                signCheck.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+                signCheck.arguments = ["--verify", "--deep", "--strict", extractedApp.path]
+                try signCheck.run()
+                signCheck.waitUntilExit()
+                guard signCheck.terminationStatus == 0 else {
+                    installProgressMessage = "Chữ ký số của bản cập nhật không hợp lệ."
+                    return
+                }
+
+                // 5. Replace current .app bundle & relaunch if running inside an .app bundle
+                let currentBundleURL = Bundle.main.bundleURL
+                if currentBundleURL.pathExtension == "app" {
+                    installProgressMessage = "Đang cài đặt phiên bản v\(release.version) và khởi động lại..."
+                    let targetPath = currentBundleURL.path
+                    let script = """
+                    sleep 1
+                    rm -rf "\(targetPath)"
+                    mv "\(extractedApp.path)" "\(targetPath)"
+                    open "\(targetPath)"
+                    """
+                    let relaunchProc = Process()
+                    relaunchProc.executableURL = URL(fileURLWithPath: "/bin/sh")
+                    relaunchProc.arguments = ["-c", script]
+                    try relaunchProc.run()
+                    NSApplication.shared.terminate(nil)
+                } else {
+                    installProgressMessage = "Đã tải và xác minh XDrive v\(release.version) tại \(extractedApp.path)"
+                    NSWorkspace.shared.activateFileViewerSelecting([extractedApp])
+                }
+            } else if release.assetName.lowercased().hasSuffix(".dmg") {
+                installProgressMessage = "Đang mở bộ cài \(release.assetName)..."
+                NSWorkspace.shared.open(archiveFile)
+            } else {
+                NSWorkspace.shared.open(release.htmlURL)
+            }
+        } catch {
+            installProgressMessage = "Lỗi cài đặt bản cập nhật: \(error.localizedDescription)"
+        }
+    }
+
+    public func openReleasePageOnGitHub() {
+        if let url = latestRelease?.htmlURL ?? URL(string: "https://github.com/\(githubRepo)/releases") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+// MARK: - GitHubUpdateBannerView (Reusable Banner When New GitHub Release Exists)
+
+public struct GitHubUpdateBannerView: View {
+    @ObservedObject var updater: Updater
+
+    public init(updater: Updater) {
+        self.updater = updater
+    }
+
+    public var body: some View {
+        if let release = updater.latestRelease {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.down.app.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.blue)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Text("Có bản cập nhật mới: XDrive v\(release.version)")
+                                .font(.headline)
+                            if release.sha256AssetURL != nil {
+                                Label("SHA-256 Verified", systemImage: "checkmark.shield.fill")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        Text("Tải trực tiếp từ GitHub Releases (\(updater.githubRepo)) • \(ByteCountFormatter.string(fromByteCount: release.assetSize, countStyle: .file))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Xem trên GitHub") {
+                        updater.openReleasePageOnGitHub()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        Task {
+                            await updater.downloadAndInstallUpdate()
+                        }
+                    } label: {
+                        Label(
+                            updater.isInstalling ? "Đang cập nhật..." : "Cập nhật Ngay",
+                            systemImage: "arrow.triangle.2.circlepath.circle.fill"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(updater.isInstalling)
+                }
+
+                if let progressMsg = updater.installProgressMessage {
+                    HStack(spacing: 8) {
+                        if updater.isInstalling {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(progressMsg)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(14)
+            .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+            )
         }
     }
 }
@@ -196,4 +436,3 @@ public struct FeedbackView: View {
         model.refreshErrorReports()
     }
 }
-

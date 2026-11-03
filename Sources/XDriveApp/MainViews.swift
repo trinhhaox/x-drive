@@ -133,6 +133,9 @@ public struct HomeDashboardView: View {
                 .padding(18)
                 .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
 
+                // GitHub Release Auto-Update Banner (appears automatically when a newer release tag exists)
+                GitHubUpdateBannerView(updater: model.updater)
+
                 // Drag & Drop File Upload Zone & Live Upload Lanes
                 FileDropArea(model: model)
                 UploadActivitySection(model: model)
@@ -409,6 +412,12 @@ public struct ZeroKnowledgePrivacyView: View {
 
 public struct DriveSettingsView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var updater: Updater
+
+    public init(model: AppModel) {
+        self.model = model
+        self.updater = model.updater
+    }
 
     public var body: some View {
         Form {
@@ -442,18 +451,22 @@ public struct DriveSettingsView: View {
                 ))
             }
 
-            Section("Cập nhật Tự động (Sparkle Appcast EdDSA) & Tài khoản") {
+            Section("Cập nhật Tự động từ GitHub Releases (trinhhaox/x-drive) & Tài khoản") {
+                Toggle("Tự động kiểm tra bản phát hành mới trên GitHub khi khởi động", isOn: $updater.autoCheckEnabled)
+
                 HStack {
-                    Text(model.updater.statusMessage)
+                    Text(updater.statusMessage)
                         .font(.callout)
                     Spacer()
-                    Button("Kiểm tra Cập nhật") {
+                    Button("Kiểm tra trên GitHub") {
                         Task {
-                            await model.updater.checkForUpdates()
+                            await updater.checkForUpdates(silent: false)
                         }
                     }
-                    .disabled(model.updater.isChecking)
+                    .disabled(updater.isChecking || updater.isInstalling)
                 }
+
+                GitHubUpdateBannerView(updater: updater)
 
                 HStack {
                     Button("Xem lại Hướng dẫn Onboarding") {
@@ -522,6 +535,24 @@ public struct MenuBarPanel: View {
             }
 
             Divider()
+
+            if let rel = model.updater.latestRelease {
+                Button {
+                    Task {
+                        await model.updater.downloadAndInstallUpdate()
+                    }
+                } label: {
+                    Label("Cập nhật XDrive v\(rel.version) từ GitHub", systemImage: "arrow.down.app.fill")
+                }
+            } else {
+                Button {
+                    Task {
+                        await model.updater.checkForUpdates(silent: false)
+                    }
+                } label: {
+                    Label("Kiểm tra Bản cập nhật trên GitHub", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
 
             Button("Thoát XDrive") {
                 NSApplication.shared.terminate(nil)

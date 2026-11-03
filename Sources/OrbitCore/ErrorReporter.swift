@@ -17,7 +17,7 @@ public struct ErrorReportPayload: Codable, Equatable, Identifiable, Sendable {
         component: String,
         code: String = "diagnostic",
         message: String,
-        appVersion: String = "0.3.13",
+        appVersion: String = "0.3.14",
         osVersion: String = ProcessInfo.processInfo.operatingSystemVersionString,
         details: [String: String] = [:]
     ) {
