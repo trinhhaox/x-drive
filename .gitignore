@@ -1,0 +1,17 @@
+# Swift Package Manager & Xcode
+.build/
+.swiftpm/
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Cloudflare Workers / Node
+node_modules/
+.wrangler/
+.dev.vars
+.env

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>OrbitFS</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.letcontactabhi.orbit.fs</string>
+    <key>CFBundleName</key>
+    <string>OrbitFS</string>
+    <key>CFBundlePackageType</key>
+    <string>XPC!</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.3.13</string>
+    <key>CFBundleVersion</key>
+    <string>39</string>
+    <key>EXAppExtensionAttributes</key>
+    <dict>
+        <key>EXExtensionPointIdentifier</key>
+        <string>com.apple.fskit.fsmodule</string>
+        <key>FSActivateOptionSyntax</key>
+        <string>u:g:o:</string>
+        <key>FSName</key>
+        <string>Helumi</string>
+        <key>FSShortName</key>
+        <string>OrbitFS</string>
+    </dict>
+</dict>
+</plist>
+
