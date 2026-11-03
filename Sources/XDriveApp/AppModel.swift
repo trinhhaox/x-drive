@@ -76,6 +76,13 @@ public final class AppModel: ObservableObject {
     @Published public var showCloudflareGuide: Bool = false
     @Published public var showGoogleDriveGuide: Bool = false
 
+    // Persistent Google OAuth 2.0 (Desktop App Flow)
+    @Published public var googleClientId: String = ""
+    @Published public var googleClientSecret: String = ""
+    @Published public var googleRefreshToken: String = ""
+    @Published public var isAuthenticatingGoogle: Bool = false
+    @Published public var hasPersistentGoogleAuth: Bool = false
+
     // Storage Optimization & MacBook SSD Health
     @Published public var isClearingCache: Bool = false
     @Published public var cacheCleanNotification: String? = nil
@@ -111,11 +118,23 @@ public final class AppModel: ObservableObject {
 
         let savedToken = UserDefaults.standard.string(forKey: "GoogleDriveAccessToken") ?? ""
         let savedEmail = UserDefaults.standard.string(forKey: "GoogleDriveUserEmail") ?? ""
+        let savedClientId = UserDefaults.standard.string(forKey: "GoogleClientId") ?? ""
+        let savedClientSecret = UserDefaults.standard.string(forKey: "GoogleClientSecret") ?? ""
+        let savedRefreshToken = UserDefaults.standard.string(forKey: "GoogleDriveRefreshToken") ?? ""
+
         self.googleDriveAccessToken = savedToken
         self.googleDriveUserEmail = savedEmail
-        if !savedToken.isEmpty {
+        self.googleClientId = savedClientId
+        self.googleClientSecret = savedClientSecret
+        self.googleRefreshToken = savedRefreshToken
+        self.hasPersistentGoogleAuth = !savedRefreshToken.isEmpty
+
+        if !savedToken.isEmpty || !savedRefreshToken.isEmpty {
             let creds = GoogleDriveCredentials(
                 accessToken: savedToken,
+                refreshToken: savedRefreshToken.isEmpty ? nil : savedRefreshToken,
+                clientId: savedClientId.isEmpty ? nil : savedClientId,
+                clientSecret: savedClientSecret.isEmpty ? nil : savedClientSecret,
                 userEmail: savedEmail.isEmpty ? nil : savedEmail
             )
             proxy.googleDriveBackend.updateCredentials(creds)
@@ -554,11 +573,83 @@ public final class AppModel: ObservableObject {
     public func disconnectGoogleDrive() {
         googleDriveAccessToken = ""
         googleDriveUserEmail = ""
+        googleRefreshToken = ""
+        hasPersistentGoogleAuth = false
         googleDriveStatus = "Đã ngắt kết nối Google Drive"
         UserDefaults.standard.removeObject(forKey: "GoogleDriveAccessToken")
         UserDefaults.standard.removeObject(forKey: "GoogleDriveUserEmail")
+        UserDefaults.standard.removeObject(forKey: "GoogleDriveRefreshToken")
         multiCloudProxy.googleDriveBackend.updateCredentials(nil)
         switchStorageProvider(to: .cloudflare)
+    }
+
+    /// Desktop App OAuth 2.0 Flow: Opens system browser, receives loopback callback, saves persistent refresh_token
+    public func startGoogleDesktopOAuthSignIn() {
+        let cid = googleClientId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let csec = googleClientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cid.isEmpty, !csec.isEmpty else {
+            googleDriveStatus = "Vui lòng nhập Google Client ID và Client Secret từ Google Cloud Console (Desktop App)."
+            return
+        }
+
+        isAuthenticatingGoogle = true
+        googleDriveStatus = "Đang mở trình duyệt để xác thực Google (Port 8787)..."
+
+        UserDefaults.standard.set(cid, forKey: "GoogleClientId")
+        UserDefaults.standard.set(csec, forKey: "GoogleClientSecret")
+
+        guard let authURL = GoogleOAuthManager.makeAuthorizationURL(clientId: cid) else {
+            googleDriveStatus = "Không tạo được URL đăng nhập Google."
+            isAuthenticatingGoogle = false
+            return
+        }
+
+        NSWorkspace.shared.open(authURL)
+
+        Task {
+            do {
+                let code = try await GoogleOAuthManager.shared.startLoopbackListener()
+                await MainActor.run {
+                    self.googleDriveStatus = "Đã nhận mã xác thực! Đang đổi lấy Refresh Token vĩnh viễn..."
+                }
+
+                let tokens = try await GoogleOAuthManager.exchangeCodeForTokens(
+                    code: code,
+                    clientId: cid,
+                    clientSecret: csec
+                )
+
+                await MainActor.run {
+                    self.googleDriveAccessToken = tokens.accessToken
+                    self.googleRefreshToken = tokens.refreshToken ?? self.googleRefreshToken
+                    self.hasPersistentGoogleAuth = true
+                    self.isAuthenticatingGoogle = false
+
+                    UserDefaults.standard.set(tokens.accessToken, forKey: "GoogleDriveAccessToken")
+                    if let r = tokens.refreshToken {
+                        UserDefaults.standard.set(r, forKey: "GoogleDriveRefreshToken")
+                    }
+
+                    let newCreds = GoogleDriveCredentials(
+                        accessToken: tokens.accessToken,
+                        refreshToken: tokens.refreshToken ?? self.googleRefreshToken,
+                        clientId: cid,
+                        clientSecret: csec,
+                        expiryDate: Date().addingTimeInterval(TimeInterval(tokens.expiresIn)),
+                        userEmail: self.googleDriveUserEmail.isEmpty ? nil : self.googleDriveUserEmail
+                    )
+                    self.multiCloudProxy.googleDriveBackend.updateCredentials(newCreds)
+                    self.switchStorageProvider(to: .googleDrive)
+                    self.googleDriveStatus = "🎉 Đã kết nối VĨNH VIỄN thành công! Đã bật Tự Động Gia Hạn trọn đời."
+                }
+            } catch {
+                await MainActor.run {
+                    self.isAuthenticatingGoogle = false
+                    self.googleDriveStatus = "Lỗi đăng nhập Google: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     public func refreshGoogleDriveQuotaAndUser() async {

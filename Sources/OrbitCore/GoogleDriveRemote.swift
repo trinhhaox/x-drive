@@ -137,6 +137,72 @@ public final class GoogleDriveRemote: WireRemote, @unchecked Sendable {
         simulatedBlobs[sampleFile.id] = Data("# XDrive + Google Drive Integration\nĐã kết nối thành công với Google Drive API v3.\n- Hỗ trợ Zero-Knowledge E2EE ChaCha20-Poly1305\n- Bảo mật tuyệt đối trước nhà cung cấp đám mây\n".utf8)
     }
 
+    // MARK: - Auto-Refresh Engine (Persistent OAuth2 Refresh Token)
+
+    @discardableResult
+    public func refreshAccessTokenIfNeeded(force: Bool = false) async throws -> String {
+        let (credsOpt, shouldRefresh) = lock.withLock { () -> (GoogleDriveCredentials?, Bool) in
+            guard let creds = self.credentials,
+                  let refresh = creds.refreshToken, !refresh.isEmpty,
+                  let cid = creds.clientId, !cid.isEmpty,
+                  let csec = creds.clientSecret, !csec.isEmpty else {
+                return (nil, false)
+            }
+            if force { return (creds, true) }
+            if let exp = creds.expiryDate {
+                return (creds, Date().addingTimeInterval(300) >= exp)
+            }
+            return (creds, false)
+        }
+
+        guard let creds = credsOpt, shouldRefresh else {
+            return lock.withLock { self.credentials?.accessToken ?? "" }
+        }
+
+        let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
+        var req = URLRequest(url: tokenURL)
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        let params: [String: String] = [
+            "client_id": creds.clientId!,
+            "client_secret": creds.clientSecret!,
+            "refresh_token": creds.refreshToken!,
+            "grant_type": "refresh_token"
+        ]
+
+        let bodyString = params.map { key, val in
+            let escapedVal = val.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? val
+            return "\(key)=\(escapedVal)"
+        }.joined(separator: "&")
+
+        req.httpBody = Data(bodyString.utf8)
+
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let errText = String(data: data, encoding: .utf8) ?? "HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 500)"
+            throw GoogleDriveAPIError.tokenRefreshFailed(errText)
+        }
+
+        struct TokenRefreshResp: Decodable {
+            let access_token: String
+            let expires_in: Int?
+        }
+
+        let decoded = try JSONDecoder().decode(TokenRefreshResp.self, from: data)
+        let newExp = Date().addingTimeInterval(TimeInterval(decoded.expires_in ?? 3590))
+
+        lock.withLock {
+            if var current = self.credentials {
+                current.accessToken = decoded.access_token
+                current.expiryDate = newExp
+                self.credentials = current
+            }
+        }
+
+        return decoded.access_token
+    }
+
     // MARK: - HTTP Request Helpers
 
     private func makeGoogleRequest(
@@ -169,6 +235,22 @@ public final class GoogleDriveRemote: WireRemote, @unchecked Sendable {
         return req
     }
 
+    private func validateGoogleResponse(_ response: URLResponse?, defaultMessage: String) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw GoogleDriveAPIError.invalidResponse
+        }
+        if (200..<300).contains(http.statusCode) || http.statusCode == 206 {
+            return
+        }
+        if http.statusCode == 401 {
+            throw GoogleDriveAPIError.serverError(
+                statusCode: 401,
+                message: "Mã truy cập Google (Token ya29...) đã hết hạn sau 60 phút. Vui lòng bấm 'Refresh access token' trên Google OAuth Playground để lấy mã mới."
+            )
+        }
+        throw GoogleDriveAPIError.serverError(statusCode: http.statusCode, message: defaultMessage)
+    }
+
     // MARK: - About & Quota
 
     public func fetchAboutAndQuota() async throws -> (user: UserInfo, quota: QuotaInfo) {
@@ -191,14 +273,23 @@ public final class GoogleDriveRemote: WireRemote, @unchecked Sendable {
             )
         }
 
-        let req = try makeGoogleRequest(
+        _ = try? await refreshAccessTokenIfNeeded(force: false)
+
+        var req = try makeGoogleRequest(
             path: "about",
             queryItems: [URLQueryItem(name: "fields", value: "user,storageQuota")]
         )
-        let (data, response) = try await session.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw GoogleDriveAPIError.serverError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 500, message: "Lỗi tải quota Google Drive")
+        var (data, response) = try await session.data(for: req)
+        if (response as? HTTPURLResponse)?.statusCode == 401 {
+            if (try? await refreshAccessTokenIfNeeded(force: true)) != nil {
+                req = try makeGoogleRequest(
+                    path: "about",
+                    queryItems: [URLQueryItem(name: "fields", value: "user,storageQuota")]
+                )
+                (data, response) = try await session.data(for: req)
+            }
         }
+        try validateGoogleResponse(response, defaultMessage: "Lỗi tải quota Google Drive")
 
         struct AboutResponse: Decodable {
             struct User: Decodable {
@@ -259,7 +350,9 @@ public final class GoogleDriveRemote: WireRemote, @unchecked Sendable {
         let q = "'\(queryParent)' in parents and trashed = false"
         let fields = "files(id,name,mimeType,size,parents,createdTime,modifiedTime,appProperties,trashed)"
 
-        let req = try makeGoogleRequest(
+        _ = try? await refreshAccessTokenIfNeeded(force: false)
+
+        var req = try makeGoogleRequest(
             path: "files",
             queryItems: [
                 URLQueryItem(name: "q", value: q),
@@ -268,10 +361,21 @@ public final class GoogleDriveRemote: WireRemote, @unchecked Sendable {
             ]
         )
 
-        let (data, resp) = try await session.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw GoogleDriveAPIError.serverError(statusCode: (resp as? HTTPURLResponse)?.statusCode ?? 500, message: "Lỗi liệt kê danh mục Google Drive")
+        var (data, resp) = try await session.data(for: req)
+        if (resp as? HTTPURLResponse)?.statusCode == 401 {
+            if (try? await refreshAccessTokenIfNeeded(force: true)) != nil {
+                req = try makeGoogleRequest(
+                    path: "files",
+                    queryItems: [
+                        URLQueryItem(name: "q", value: q),
+                        URLQueryItem(name: "fields", value: fields),
+                        URLQueryItem(name: "pageSize", value: "100")
+                    ]
+                )
+                (data, resp) = try await session.data(for: req)
+            }
         }
+        try validateGoogleResponse(resp, defaultMessage: "Lỗi liệt kê danh mục Google Drive")
 
         struct ListResponse: Decodable {
             struct File: Decodable {
