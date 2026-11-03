@@ -5,8 +5,8 @@ import CryptoKit
 // MARK: - Shared App Group Container
 
 public enum SharedContainer {
-    public static let appGroupIdentifier = "VN5T9LGLT3.com.letcontactabhi.orbit"
-    public static let keychainAccessGroup = "VN5T9LGLT3.com.letcontactabhi.orbit.shared"
+    public static let appGroupIdentifier = "4DU4BTV46U.vn.xox.xdrive"
+    public static let keychainAccessGroup = "4DU4BTV46U.vn.xox.xdrive.shared"
     public static let refreshDirectoryName = "._helumi-refresh"
 
     public static var overrideDirectory: URL?
@@ -188,8 +188,8 @@ public final class KeychainSecretStore: SecretStore, @unchecked Sendable {
     private let synchronizable: Bool
     private let fallback = InMemorySecretStore()
 
-    public static let local = KeychainSecretStore(service: "com.letcontactabhi.orbit.keys", synchronizable: false)
-    public static let icloud = KeychainSecretStore(service: "com.letcontactabhi.orbit.keys.icloud", synchronizable: true)
+    public static let local = KeychainSecretStore(service: "vn.xox.xdrive.keys", synchronizable: false)
+    public static let icloud = KeychainSecretStore(service: "vn.xox.xdrive.keys.icloud", synchronizable: true)
 
     public init(service: String, synchronizable: Bool = false) {
         self.service = service
@@ -266,7 +266,7 @@ public final class TokenStore: @unchecked Sendable {
     private let store: SecretStore
     private let accountKey = "session_tokens"
 
-    public init(store: SecretStore = KeychainSecretStore(service: "com.letcontactabhi.orbit.session")) {
+    public init(store: SecretStore = KeychainSecretStore(service: "vn.xox.xdrive.session")) {
         self.store = store
     }
 

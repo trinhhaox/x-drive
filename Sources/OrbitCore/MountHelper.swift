@@ -16,8 +16,8 @@ public enum MountHelper {
     public static let version: Int = 6
     public static let mountPoint: String = "/Volumes/XDrive"
     public static let fileSystemType: String = "OrbitFS"
-    public static let machService: String = "com.letcontactabhi.orbit.MountHelper"
-    public static let plistName: String = "com.letcontactabhi.orbit.MountHelper.plist"
+    public static let machService: String = "vn.xox.xdrive.MountHelper"
+    public static let plistName: String = "vn.xox.xdrive.MountHelper.plist"
     public static let resource: String = "xdrive"
     public static let resources: [String] = ["xdrive", "orbit", "orbitfs"]
 

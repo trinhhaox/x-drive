@@ -26,8 +26,8 @@ cp "$PROJECT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
     cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
-cp "$PROJECT_DIR/Resources/com.letcontactabhi.orbit.MountHelper.plist" \
-   "$APP_BUNDLE/Contents/Library/LaunchDaemons/com.letcontactabhi.orbit.MountHelper.plist"
+cp "$PROJECT_DIR/Resources/vn.xox.xdrive.MountHelper.plist" \
+   "$APP_BUNDLE/Contents/Library/LaunchDaemons/vn.xox.xdrive.MountHelper.plist"
 
 # 2. Copy FSKit FileSystem Extension (OrbitFS.appex)
 cp "$BIN_DIR/OrbitFS" "$APP_BUNDLE/Contents/Extensions/OrbitFS.appex/Contents/MacOS/OrbitFS"
@@ -47,7 +47,7 @@ else
 fi
 
 codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Extensions/OrbitFS.appex"
-codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/PlugIns/OrbitFinder.appex"
+codesign --force --sign "$SIGN_IDENTITY" --entitlements "$PROJECT_DIR/Resources/OrbitFinder.entitlements" "$APP_BUNDLE/Contents/PlugIns/OrbitFinder.appex"
 codesign --force --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/OrbitMountHelper"
 codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"

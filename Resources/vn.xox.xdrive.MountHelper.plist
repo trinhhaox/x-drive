@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.letcontactabhi.orbit.MountHelper</string>
+    <string>vn.xox.xdrive.MountHelper</string>
     <key>BundleProgram</key>
     <string>Contents/MacOS/OrbitMountHelper</string>
     <key>MachServices</key>
     <dict>
-        <key>com.letcontactabhi.orbit.MountHelper</key>
+        <key>vn.xox.xdrive.MountHelper</key>
         <true/>
     </dict>
 </dict>

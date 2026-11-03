@@ -188,7 +188,7 @@ public final class LiveVolumeManager: ObservableObject {
     public func activateFinderSyncExtension() {
         let pkProc = Process()
         pkProc.executableURL = URL(fileURLWithPath: "/usr/bin/pluginkit")
-        pkProc.arguments = ["-e", "use", "-i", "com.letcontactabhi.orbit.finder"]
+        pkProc.arguments = ["-e", "use", "-i", "vn.xox.xdrive.finder"]
         try? pkProc.run()
         pkProc.waitUntilExit()
     }
