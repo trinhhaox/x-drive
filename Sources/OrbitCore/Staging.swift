@@ -90,6 +90,22 @@ public protocol BlobSource: Sendable {
     func readSlice(offset: UInt64, length: Int) throws -> Data
 }
 
+public struct MemoryBlobSource: BlobSource, Sendable {
+    public let data: Data
+    public var totalSize: UInt64 { UInt64(data.count) }
+
+    public init(data: Data) {
+        self.data = data
+    }
+
+    public func readSlice(offset: UInt64, length: Int) throws -> Data {
+        let start = Int(min(offset, totalSize))
+        let end = Int(min(offset + UInt64(length), totalSize))
+        guard start < end else { return Data() }
+        return data.subdata(in: start..<end)
+    }
+}
+
 public final class FileBlobSource: BlobSource, @unchecked Sendable {
     public let fileURL: URL
     public let totalSize: UInt64

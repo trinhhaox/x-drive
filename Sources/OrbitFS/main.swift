@@ -14,7 +14,7 @@ public final class OrbitFSItem: FSItem, @unchecked Sendable {
     }
 }
 
-// MARK: - OrbitVolume (Full FSKit Volume Implementation Matching Helumi's OrbitVolume)
+// MARK: - OrbitVolume (Full FSKit Volume Implementation for XDrive)
 
 @available(macOS 15.4, *)
 public final class OrbitVolume: FSVolume,
@@ -583,7 +583,7 @@ public final class OrbitFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperatio
         replyHandler reply: @escaping (FSProbeResult?, Error?) -> Void
     ) {
         let containerID = FSContainerIdentifier(uuid: UUID(uuidString: "4B9AD7AD-1329-3431-873F-874D0CE22A14")!)
-        reply(FSProbeResult.usable(name: "Helumi", containerID: containerID), nil)
+        reply(FSProbeResult.usable(name: "XDrive", containerID: containerID), nil)
     }
 
     public func loadResource(
@@ -610,7 +610,7 @@ public final class OrbitFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperatio
         let volID = FSVolume.Identifier(uuid: UUID(uuidString: "FFE5475D-3776-3AB8-9C0B-56A9EAC56D5E")!)
         let volume = OrbitVolume(
             volumeID: volID,
-            volumeName: FSFileName(string: "Helumi"),
+            volumeName: FSFileName(string: "XDrive"),
             drive: drive,
             ownerUID: uid,
             ownerGID: gid

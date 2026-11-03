@@ -36,7 +36,7 @@ public struct DriveExplorerView: View {
                             } label: {
                                 HStack(spacing: 4) {
                                     Image(systemName: crumb.id == DriveTree.rootID ? "externaldrive.fill" : "folder.fill")
-                                    Text(crumb.id == DriveTree.rootID ? "/Volumes/Helumi" : crumb.name)
+                                    Text(crumb.id == DriveTree.rootID ? "/Volumes/XDrive" : crumb.name)
                                 }
                                 .font(.callout.weight(crumb.id == model.currentExplorerDirectoryID ? .bold : .regular))
                             }
@@ -159,13 +159,22 @@ public struct DriveExplorerView: View {
                                     HStack(spacing: 6) {
                                         Text(node.name)
                                             .font(.body.weight(.medium))
-                                        if model.isNodePinned(node) {
-                                            Label("Đã ghim Offline", systemImage: "pin.fill")
-                                                .font(.caption2)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.orange.opacity(0.15), in: Capsule())
-                                                .foregroundStyle(.orange)
+                                        if node.kind == .file {
+                                            if model.isNodePinned(node) {
+                                                Label("Đã ghim Offline", systemImage: "pin.fill")
+                                                    .font(.caption2)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(Color.orange.opacity(0.15), in: Capsule())
+                                                    .foregroundStyle(.orange)
+                                            } else {
+                                                Label("Chỉ trên Mây (0B SSD)", systemImage: "icloud")
+                                                    .font(.caption2)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(Color.blue.opacity(0.1), in: Capsule())
+                                                    .foregroundStyle(.blue)
+                                            }
                                         }
                                         if case .unlocked = model.privacyState {
                                             Image(systemName: "lock.fill")
@@ -227,6 +236,43 @@ public struct DriveExplorerView: View {
                             }
                             .padding(.vertical, 4)
                             .contentShape(Rectangle())
+                            .contextMenu {
+                                if node.kind == .file {
+                                    if model.isNodePinned(node) {
+                                        Button {
+                                            model.evictNodeChunks(node)
+                                        } label: {
+                                            Label("Giải phóng SSD (Chỉ lưu trên Đám mây)", systemImage: "sparkles")
+                                        }
+                                    } else {
+                                        Button {
+                                            model.togglePinNode(node)
+                                        } label: {
+                                            Label("Tải về & Giữ ngoại tuyến trên Mac", systemImage: "pin.fill")
+                                        }
+                                    }
+                                }
+                                Button {
+                                    model.createShareLinkForDriveNode(node)
+                                } label: {
+                                    Label("Sao chép Liên kết Chia sẻ E2EE", systemImage: "square.and.arrow.up")
+                                }
+                                Button {
+                                    renamingNode = node
+                                    renameText = node.name
+                                } label: {
+                                    Label("Đổi tên", systemImage: "pencil")
+                                }
+                                Divider()
+                                Button(role: .destructive) {
+                                    if selectedNode?.id == node.id {
+                                        selectedNode = nil
+                                    }
+                                    model.deleteExplorerNode(node)
+                                } label: {
+                                    Label("Xóa", systemImage: "trash")
+                                }
+                            }
                             .onTapGesture(count: 2) {
                                 if node.kind == .directory {
                                     model.navigateExplorer(to: node.id)
@@ -290,6 +336,28 @@ public struct DriveExplorerView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     } else {
+                        HStack(spacing: 8) {
+                            if model.isNodePinned(item) {
+                                Button {
+                                    model.evictNodeChunks(item)
+                                } label: {
+                                    Label("Giải phóng SSD", systemImage: "sparkles")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.green)
+                            } else {
+                                Button {
+                                    model.togglePinNode(item)
+                                } label: {
+                                    Label("Ghim Ngoại Tuyến", systemImage: "pin.fill")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.orange)
+                            }
+                        }
+
                         GroupBox("Xem trước Nội dung Khối 1 MiB (ContentReader)") {
                             ScrollView {
                                 Text(previewText.isEmpty ? "(Đang đọc khối dữ liệu...)" : previewText)

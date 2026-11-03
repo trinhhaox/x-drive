@@ -60,6 +60,48 @@ public final class ErrorReporter: @unchecked Sendable {
     public func clearQueue() {
         lock.withLock { recentReports.removeAll() }
     }
+
+    /// Uploads queued diagnostic & crash reports to the backend endpoint `POST /api/error-reports`
+    public func uploadReports(to baseURL: URL, token: String? = nil) async throws -> Int {
+        let reports = latestReports()
+        guard !reports.isEmpty else { return 0 }
+
+        let endpoint = baseURL.appendingPathComponent("api/error-reports")
+        var sentCount = 0
+
+        for report in reports {
+            var request = URLRequest(url: endpoint)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let token {
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+
+            let body: [String: Any] = [
+                "id": report.id,
+                "component": report.component,
+                "code": report.code,
+                "message": report.message,
+                "appVersion": report.appVersion,
+                "osVersion": report.osVersion,
+                "details": report.details
+            ]
+
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { continue }
+            request.httpBody = jsonData
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                    sentCount += 1
+                }
+            } catch {
+                // If network fails, stop loop and preserve unsent reports
+                break
+            }
+        }
+        return sentCount
+    }
 }
 
 // MARK: - CrashReports (Apple MetricKit MXMetricManagerSubscriber)

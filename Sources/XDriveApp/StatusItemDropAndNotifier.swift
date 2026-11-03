@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import UserNotifications
+@preconcurrency import UserNotifications
 import OrbitCore
 
 // MARK: - StatusItemDropView (Drag & Drop directly onto macOS Menu Bar icon)

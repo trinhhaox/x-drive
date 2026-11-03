@@ -63,7 +63,7 @@ public final class BrowserSignIn: NSObject, ASWebAuthenticationPresentationConte
     }
 }
 
-// MARK: - EjectWatcher (Monitors /Volumes/Helumi Mount & Unmount Events)
+// MARK: - EjectWatcher (Monitors /Volumes/XDrive Mount & Unmount Events)
 
 @MainActor
 public final class EjectWatcher {

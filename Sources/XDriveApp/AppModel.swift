@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import OrbitCore
 
 @MainActor
@@ -27,20 +28,22 @@ public final class AppModel: ObservableObject {
 
     @Published public var selectedTab: SidebarTab = .home
     @Published public var showWelcomeSheet: Bool = false
+    @Published public var showPlanPickerSheet: Bool = false
+    @Published public var customGigabytesInput: Int = 100
     @Published public var isSignedIn: Bool = true
     @Published public var user: UserInfo = UserInfo(
         id: "usr_trinhhao",
         email: "mr.trinhhao@gmail.com",
         name: "Trịnh Hảo",
-        plan: "Pro 2 TB",
-        storageUsed: 14_580_000_000,
-        storageLimit: 2_000_000_000_000
+        plan: "Cloudflare R2 (10 GB Miễn phí)",
+        storageUsed: 0,
+        storageLimit: 10_737_418_240
     )
     @Published public var quota: QuotaInfo = QuotaInfo(
-        usedBytes: 14_580_000_000,
-        limitBytes: 2_000_000_000_000,
-        plan: "Pro 2 TB",
-        fileCount: 128
+        usedBytes: 0,
+        limitBytes: 10_737_418_240,
+        plan: "Cloudflare R2 (10 GB Miễn phí)",
+        fileCount: 0
     )
     @Published public var driveStatus: DriveStatusSnapshot = DriveStatusSnapshot()
     @Published public var privacyState: PrivacyState = .off
@@ -63,12 +66,22 @@ public final class AppModel: ObservableObject {
     @Published public var explorerBreadcrumbs: [DriveNode] = []
     @Published public var pinnedRemoteIDs: Set<String> = []
 
-    // Cloud Backend Endpoint State
-    @Published public var apiEndpointURL: String = ProcessInfo.processInfo.environment["ORBIT_API_URL"] ?? "http://127.0.0.1:8787"
-    @Published public var useLiveCloudflareBackend: Bool = false
-    @Published public var backendConnectionStatus: String = "Đang dùng Bộ mô phỏng Đám mây Cục bộ (LocalWireRemote)"
+    // Cloud Backend Endpoint & Multi-Cloud Provider State
+    @Published public var apiEndpointURL: String = ProcessInfo.processInfo.environment["ORBIT_API_URL"] ?? "https://xdrive-orbit-api.mr-trinhhao.workers.dev"
+    @Published public var selectedStorageProvider: MultiCloudProviderType = .cloudflare
+    @Published public var backendConnectionStatus: String = "Đã kết nối Cloudflare Workers (https://xdrive-orbit-api.mr-trinhhao.workers.dev)"
+    @Published public var googleDriveAccessToken: String = ""
+    @Published public var googleDriveUserEmail: String = ""
+    @Published public var googleDriveStatus: String = "Sẵn sàng (Mô phỏng Google Drive API v3)"
+    @Published public var showCloudflareGuide: Bool = false
+    @Published public var showGoogleDriveGuide: Bool = false
 
-    public let localBackend = LocalWireRemote()
+    // Storage Optimization & MacBook SSD Health
+    @Published public var isClearingCache: Bool = false
+    @Published public var cacheCleanNotification: String? = nil
+    @Published public var physicalBundleSizeBytes: UInt64 = 0
+
+    public let multiCloudProxy: MultiCloudProxyRemote
     public let keyManager = KeyManager(
         localStore: InMemorySecretStore(),
         cloudStore: InMemorySecretStore()
@@ -85,9 +98,38 @@ public final class AppModel: ObservableObject {
     private var keyMonitor: Any?
 
     public init() {
-        let locked = LockedRemote(inner: localBackend, keyManager: keyManager)
+        let endpointURL = URL(string: ProcessInfo.processInfo.environment["ORBIT_API_URL"] ?? "https://xdrive-orbit-api.mr-trinhhao.workers.dev")
+        let proxy = MultiCloudProxyRemote(
+            initialProvider: .cloudflare,
+            cloudflareBackend: OrbitAPI(baseURL: endpointURL),
+            googleDriveBackend: GoogleDriveRemote()
+        )
+        self.multiCloudProxy = proxy
+        let locked = LockedRemote(inner: proxy, keyManager: keyManager)
         self.lockedRemote = locked
         self.drive = OrbitDrive(remote: locked)
+
+        let savedToken = UserDefaults.standard.string(forKey: "GoogleDriveAccessToken") ?? ""
+        let savedEmail = UserDefaults.standard.string(forKey: "GoogleDriveUserEmail") ?? ""
+        self.googleDriveAccessToken = savedToken
+        self.googleDriveUserEmail = savedEmail
+        if !savedToken.isEmpty {
+            let creds = GoogleDriveCredentials(
+                accessToken: savedToken,
+                userEmail: savedEmail.isEmpty ? nil : savedEmail
+            )
+            proxy.googleDriveBackend.updateCredentials(creds)
+        }
+
+        let savedProviderRaw = UserDefaults.standard.string(forKey: "SelectedStorageProvider")
+        let initialProvider: MultiCloudProviderType = {
+            if let raw = savedProviderRaw, let match = MultiCloudProviderType(rawValue: raw) {
+                return match
+            }
+            return !savedToken.isEmpty ? .googleDrive : .cloudflare
+        }()
+        self.selectedStorageProvider = initialProvider
+        proxy.setProvider(initialProvider)
         let cacheSettings = SharedContainer.readCacheSettings()
         self.cacheLimitGB = Double(cacheSettings.limitBytes) / (1024 * 1024 * 1024)
         self.politeUploads = SharedContainer.readUploadSettings().polite
@@ -101,9 +143,16 @@ public final class AppModel: ObservableObject {
         self.recentErrorReports = ErrorReporter.shared.latestReports()
         self.updater.startAutomaticChecks()
         registerKeyboardShortcut()
+        setupLiveVolumeWatcher()
 
         Task {
             await bootstrapInitialFilesIfNeeded()
+            if self.selectedStorageProvider == .googleDrive {
+                await refreshGoogleDriveQuotaAndUser()
+            } else {
+                await refreshCloudflareQuotaAndUser()
+            }
+            await driveController.mountDrive()
             refreshSnapshot()
         }
     }
@@ -165,7 +214,11 @@ public final class AppModel: ObservableObject {
     }
 
     public func rebuildExplorerState() {
+        if let ghost = drive.tree.lookup(name: "501", inParent: DriveTree.rootID) {
+            _ = drive.tree.remove(id: ghost.id)
+        }
         explorerItems = drive.tree.listChildren(of: currentExplorerDirectoryID)
+            .filter { !$0.name.hasPrefix(".") && $0.name != "501" && $0.name != ".Trashes" }
         var crumbs: [DriveNode] = []
         var cursor: UInt64? = currentExplorerDirectoryID
         var visited = Set<UInt64>()
@@ -270,7 +323,7 @@ public final class AppModel: ObservableObject {
     }
 
     public func testCloudflareBackendConnection() {
-        guard let url = URL(string: apiEndpointURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/app/appcast.xml") else {
+        guard let url = URL(string: apiEndpointURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/health") else {
             backendConnectionStatus = "URL không hợp lệ."
             return
         }
@@ -278,13 +331,14 @@ public final class AppModel: ObservableObject {
         Task {
             do {
                 let (_, resp) = try await URLSession.shared.data(from: url)
-                if let http = resp as? HTTPURLResponse, (200..<500).contains(http.statusCode) {
+                if let http = resp as? HTTPURLResponse, (200..<400).contains(http.statusCode) {
                     backendConnectionStatus = "Kết nối Cloudflare Worker thành công (HTTP \(http.statusCode))!"
+                    await refreshCloudflareQuotaAndUser()
                 } else {
                     backendConnectionStatus = "Không nhận được phản hồi hợp lệ từ Worker."
                 }
             } catch {
-                backendConnectionStatus = "Chưa kết nối được Worker (\(error.localizedDescription)) — Đang dùng LocalWireRemote."
+                backendConnectionStatus = "Chưa kết nối được Worker (\(error.localizedDescription))."
             }
         }
     }
@@ -294,9 +348,9 @@ public final class AppModel: ObservableObject {
         if rootChildren.isEmpty {
             let docs = try? await drive.createItem(name: "Tài liệu Dự án", parentID: DriveTree.rootID, kind: .directory)
             let media = try? await drive.createItem(name: "Thiết kế & Video", parentID: DriveTree.rootID, kind: .directory)
-            let readmeNode = try? await drive.createItem(name: "Helumi-Architecture-Notes.md", parentID: DriveTree.rootID, kind: .file)
+            let readmeNode = try? await drive.createItem(name: "XDrive-Architecture-Notes.md", parentID: DriveTree.rootID, kind: .file)
             if let rn = readmeNode {
-                let sample = Data("# XDrive (OrbitFS + Zero-Knowledge E2EE)\nỔ đĩa đám mây tốc độ cao gắn tại /Volumes/Helumi.\n- Khối dữ liệu chuẩn: 1 MiB (1,048,576 bytes)\n- Mã hóa đầu cuối: AES-256-GCM + HKDF-SHA256 + P-256 ECDH\n".utf8)
+                let sample = Data("# XDrive (OrbitFS + Zero-Knowledge E2EE)\nỔ đĩa đám mây tốc độ cao gắn tại /Volumes/XDrive.\n- Khối dữ liệu chuẩn: 1 MiB (1,048,576 bytes)\n- Mã hóa đầu cuối: AES-256-GCM + HKDF-SHA256 + P-256 ECDH\n".utf8)
                 _ = try? await drive.writeFile(nodeID: rn.id, data: sample, offset: 0)
                 await drive.closeFile(nodeID: rn.id)
             }
@@ -327,6 +381,8 @@ public final class AppModel: ObservableObject {
         performSearch()
         rebuildExplorerState()
         refreshErrorReports()
+        updateQuotaFromLocalTree()
+        physicalBundleSizeBytes = LiveVolumeManager.shared.physicalBundleSizeBytes()
     }
 
     public func performSearch() {
@@ -334,12 +390,73 @@ public final class AppModel: ObservableObject {
     }
 
     public func mountOrOpenDrive() {
-        Task {
-            await driveController.mountDrive()
-            if case .mounted(let url) = driveController.state {
-                NSWorkspace.shared.open(url)
+        let mountURL = LiveVolumeManager.mountPointURL
+        NSApp.activate(ignoringOtherApps: true)
+        if FileManager.default.fileExists(atPath: mountURL.path) {
+            NSWorkspace.shared.open(mountURL)
+        } else {
+            Task {
+                await LiveVolumeManager.shared.mountLiveVolume()
+                NSWorkspace.shared.open(mountURL)
             }
         }
+    }
+
+    public func openMainWindow() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = AppDelegate.shared?.mainWindow {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        for window in NSApp.windows where !(window is NSPanel) {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+    }
+
+    // MARK: - Live Volume Two-Way Sync (FSEvents & Disk Mirroring)
+
+    private func setupLiveVolumeWatcher() {
+        LiveVolumeManager.shared.onFileChanged = { [weak self] urls in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.handleLiveDiskFilesChanged(urls)
+            }
+        }
+    }
+
+    public func handleLiveDiskFilesChanged(_ urls: [URL]) async {
+        for url in urls {
+            let name = url.lastPathComponent
+            let fullPath = url.path
+            // Ignore system metadata and user trash folders (.Trashes/501, .fseventsd, etc.)
+            if name.hasPrefix(".") || name == "501" || fullPath.contains("/.Trashes") || fullPath.contains("/.fseventsd") {
+                continue
+            }
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+                if isDir.boolValue {
+                    let children = (try? await drive.listDirectory(nodeID: DriveTree.rootID)) ?? []
+                    if !children.contains(where: { $0.name == name && $0.kind == .directory }) {
+                        _ = try? await drive.createItem(name: name, parentID: DriveTree.rootID, kind: .directory)
+                    }
+                } else {
+                    guard let data = try? Data(contentsOf: url) else { continue }
+                    let children = (try? await drive.listDirectory(nodeID: DriveTree.rootID)) ?? []
+                    if let existing = children.first(where: { $0.name == name && $0.kind == .file }) {
+                        _ = try? await drive.writeFile(nodeID: existing.id, data: data, offset: 0)
+                        await drive.closeFile(nodeID: existing.id)
+                    } else {
+                        if let created = try? await drive.createItem(name: name, parentID: DriveTree.rootID, kind: .file) {
+                            _ = try? await drive.writeFile(nodeID: created.id, data: data, offset: 0)
+                            await drive.closeFile(nodeID: created.id)
+                        }
+                    }
+                }
+            }
+        }
+        refreshSnapshot()
     }
 
     public func dropFiles(_ urls: [URL], intoParentID parentID: UInt64 = DriveTree.rootID) {
@@ -355,9 +472,163 @@ public final class AppModel: ObservableObject {
                     _ = try? await drive.writeFile(nodeID: created.id, data: data, offset: 0)
                     await drive.closeFile(nodeID: created.id)
                 }
+                // Mirror out to real mounted volume on /Volumes/XDrive
+                LiveVolumeManager.shared.mirrorFileToLiveDisk(relativePath: url.lastPathComponent, data: data)
             }
             refreshSnapshot()
         }
+    }
+
+    public func handleDroppedItemProviders(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, _ in
+                guard let self else { return }
+                var fileURL: URL?
+                if let url = item as? URL {
+                    fileURL = url
+                } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                    fileURL = url
+                }
+                guard let target = fileURL else { return }
+                Task { @MainActor in
+                    self.dropFilesAndShare([target])
+                }
+            }
+        }
+    }
+
+    public func dropFilesAndShare(_ urls: [URL]) {
+        dropFiles(urls)
+        if let first = urls.first {
+            let node = SearchIndex.Node(
+                id: UInt64(abs(first.lastPathComponent.hashValue)),
+                name: first.lastPathComponent,
+                relativePath: "/\(first.lastPathComponent)",
+                isDirectory: false,
+                size: 0,
+                modifiedAt: Date()
+            )
+            createShareLink(for: node)
+        }
+    }
+
+    // MARK: - Multi-Cloud Provider Management (Cloudflare & Google Drive)
+
+    public func switchStorageProvider(to provider: MultiCloudProviderType) {
+        selectedStorageProvider = provider
+        UserDefaults.standard.set(provider.rawValue, forKey: "SelectedStorageProvider")
+        multiCloudProxy.setProvider(provider)
+        Task {
+            switch provider {
+            case .cloudflare:
+                backendConnectionStatus = "Đã chuyển sang Cloudflare Workers (OrbitAPI)"
+                testCloudflareBackendConnection()
+                await refreshCloudflareQuotaAndUser()
+            case .googleDrive:
+                backendConnectionStatus = "Đã chuyển sang Google Drive (Google API v3)"
+                await refreshGoogleDriveQuotaAndUser()
+            }
+            refreshSnapshot()
+        }
+    }
+
+    public func connectGoogleDrive(accessToken: String, email: String? = nil) {
+        let trimmed = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        googleDriveAccessToken = trimmed
+        if let email, !email.isEmpty { googleDriveUserEmail = email }
+
+        UserDefaults.standard.set(trimmed, forKey: "GoogleDriveAccessToken")
+        if !googleDriveUserEmail.isEmpty {
+            UserDefaults.standard.set(googleDriveUserEmail, forKey: "GoogleDriveUserEmail")
+        }
+
+        let creds = GoogleDriveCredentials(
+            accessToken: trimmed,
+            userEmail: googleDriveUserEmail.isEmpty ? nil : googleDriveUserEmail
+        )
+        multiCloudProxy.googleDriveBackend.updateCredentials(creds)
+        switchStorageProvider(to: .googleDrive)
+    }
+
+    public func disconnectGoogleDrive() {
+        googleDriveAccessToken = ""
+        googleDriveUserEmail = ""
+        googleDriveStatus = "Đã ngắt kết nối Google Drive"
+        UserDefaults.standard.removeObject(forKey: "GoogleDriveAccessToken")
+        UserDefaults.standard.removeObject(forKey: "GoogleDriveUserEmail")
+        multiCloudProxy.googleDriveBackend.updateCredentials(nil)
+        switchStorageProvider(to: .cloudflare)
+    }
+
+    public func refreshGoogleDriveQuotaAndUser() async {
+        do {
+            let (usr, q) = try await multiCloudProxy.googleDriveBackend.fetchAboutAndQuota()
+            self.user = usr
+            self.quota = q
+            self.googleDriveStatus = "Kết nối Google Drive thành công (\(usr.email))"
+        } catch {
+            self.googleDriveStatus = "Lỗi kết nối Google Drive: \(error.localizedDescription)"
+        }
+    }
+
+    public func refreshCloudflareQuotaAndUser() async {
+        do {
+            let u = try await multiCloudProxy.cloudflareBackend.me()
+            let q = try await multiCloudProxy.cloudflareBackend.quota()
+            await MainActor.run {
+                self.user = u
+                self.quota = q
+                self.updateQuotaFromLocalTree()
+            }
+        } catch {
+            await MainActor.run {
+                self.updateQuotaFromLocalTree()
+            }
+        }
+    }
+
+    public func updateQuotaFromLocalTree() {
+        let allNodes = drive.tree.allNodesSnapshot()
+        let fileNodes = allNodes.filter { $0.kind == .file }
+        let totalBytes = fileNodes.reduce(Int64(0)) { $0 + Int64($1.size) }
+        let count = fileNodes.count
+        let finalUsed = max(self.quota.usedBytes, totalBytes)
+        let finalCount = max(self.quota.fileCount, count)
+        self.quota = QuotaInfo(
+            usedBytes: finalUsed,
+            limitBytes: self.quota.limitBytes > 0 ? self.quota.limitBytes : 10_737_418_240,
+            plan: self.quota.plan.isEmpty ? "Cloudflare R2 (10 GB Miễn phí)" : self.quota.plan,
+            fileCount: finalCount
+        )
+        self.user.storageUsed = finalUsed
+    }
+
+    public func applyStoragePlan(tier: StorageTier) {
+        let planTitle = tier.isFree ? "\(tier.name)" : "\(tier.name) (~$\(String(format: "%.2f", tier.priceUSDMonthly))/tháng)"
+        self.quota = QuotaInfo(
+            usedBytes: self.quota.usedBytes,
+            limitBytes: tier.limitBytes,
+            plan: planTitle,
+            fileCount: self.quota.fileCount
+        )
+        self.user.plan = planTitle
+        self.user.storageLimit = tier.limitBytes
+
+        Task {
+            if selectedStorageProvider == .cloudflare {
+                try? await multiCloudProxy.cloudflareBackend.updatePlan(
+                    limitBytes: tier.limitBytes,
+                    planName: planTitle
+                )
+            }
+            refreshSnapshot()
+        }
+    }
+
+    public func applyCustomStoragePlan(gigabytes: Int) {
+        let tier = StorageTier.customTier(gigabytes: max(1, gigabytes))
+        applyStoragePlan(tier: tier)
     }
 
     // MARK: - Zero-Knowledge E2EE Actions
@@ -370,7 +641,7 @@ public final class AppModel: ObservableObject {
 
             Task { [weak self] in
                 guard let self else { return }
-                let sweep = PrivacySweep(remote: self.localBackend, keyManager: self.keyManager)
+                let sweep = PrivacySweep(remote: self.multiCloudProxy, keyManager: self.keyManager)
                 _ = try? await sweep.runSweep { [weak self] prog in
                     Task { @MainActor in
                         self?.privacyState = .migrating(prog)
@@ -432,6 +703,62 @@ public final class AppModel: ObservableObject {
     public func clearCache() {
         drive.chunkStore.clearAll(includePinned: false)
         refreshSnapshot()
+    }
+
+    /// Complete SSD Optimization: Clears unpinned local cache chunks & runs `hdiutil compact` to reclaim Mac SSD host space
+    public func clearMacCacheAndOptimizeStorage() {
+        guard !isClearingCache else { return }
+        isClearingCache = true
+        let oldChunkBytes = drive.chunkStore.totalBytes
+        let oldBundleBytes = LiveVolumeManager.shared.physicalBundleSizeBytes()
+
+        Task {
+            // 1. Evict unpinned chunks in memory & cache dir
+            drive.chunkStore.clearAll(includePinned: false)
+
+            // 2. Run hdiutil compact to reclaim disk space from XDriveVolume.sparsebundle
+            _ = await LiveVolumeManager.shared.compactSparseBundle()
+
+            let newChunkBytes = drive.chunkStore.totalBytes
+            let newBundleBytes = LiveVolumeManager.shared.physicalBundleSizeBytes()
+
+            let freedChunks = oldChunkBytes > newChunkBytes ? oldChunkBytes - newChunkBytes : 0
+            let freedBundle = oldBundleBytes > newBundleBytes ? oldBundleBytes - newBundleBytes : 0
+            let totalFreed = max(freedChunks + freedBundle, oldChunkBytes)
+            let freedStr = ByteCountFormatter.string(fromByteCount: Int64(totalFreed), countStyle: .file)
+
+            await MainActor.run {
+                self.isClearingCache = false
+                self.cacheCleanNotification = "Đã dọn dẹp và giải phóng \(freedStr) dung lượng SSD Mac!"
+                self.refreshSnapshot()
+            }
+
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            await MainActor.run {
+                if self.cacheCleanNotification?.contains(freedStr) == true {
+                    self.cacheCleanNotification = nil
+                }
+            }
+        }
+    }
+
+    /// Evicts cached chunks for a specific file node to make it online-only (0 Byte on Mac)
+    public func evictNodeChunks(_ node: DriveNode) {
+        guard let remID = node.remoteID else { return }
+        if pinnedRemoteIDs.contains(remID) {
+            togglePinNode(node)
+        }
+        drive.chunkStore.invalidate(remoteID: remID)
+        refreshSnapshot()
+        cacheCleanNotification = "Đã đưa '\(node.name)' về trạng thái Chỉ trên Đám mây (0 Byte trên SSD Mac)."
+        Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await MainActor.run {
+                if self.cacheCleanNotification?.contains(node.name) == true {
+                    self.cacheCleanNotification = nil
+                }
+            }
+        }
     }
 
     public func updateCacheLimit(_ gb: Double) {

@@ -23,7 +23,7 @@ public enum OrbitAPIError: Error, LocalizedError {
 // MARK: - OrbitAPI (Cloudflare Workers REST Client + WireRemote Conformance)
 
 public final class OrbitAPI: WireRemote, @unchecked Sendable {
-    public static let defaultBaseURLString = "https://orbit-api.letcontactabhi.workers.dev"
+    public static let defaultBaseURLString = "https://xdrive-orbit-api.mr-trinhhao.workers.dev"
 
     public let baseURL: URL
     public let tokenStore: TokenStore
@@ -125,6 +125,16 @@ public final class OrbitAPI: WireRemote, @unchecked Sendable {
     public func quota() async throws -> QuotaInfo {
         let req = authorizedRequest(path: "quota")
         return try await send(req, as: QuotaInfo.self)
+    }
+
+    public func updatePlan(limitBytes: Int64, planName: String) async throws {
+        let payload: [String: Any] = [
+            "limitBytes": limitBytes,
+            "plan": planName
+        ]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let req = authorizedRequest(path: "user/plan", method: "POST", body: body)
+        _ = try await session.data(for: req)
     }
 
     // MARK: - WireRemote & DriveRemote Conformance

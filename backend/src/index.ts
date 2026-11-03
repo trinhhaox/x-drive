@@ -40,7 +40,7 @@ async function ensureDefaultUser(db: D1Database, userId = "usr_default") {
   await db
     .prepare(
       `INSERT OR IGNORE INTO users (id, email, name, plan, storage_used, storage_limit, created_at)
-       VALUES (?, 'mr.trinhhao@gmail.com', 'Trịnh Hảo', 'Pro 2 TB', 0, 2199023255552, ?)`
+       VALUES (?, 'mr.trinhhao@gmail.com', 'Trịnh Hảo', 'Cloudflare R2 (10 GB Miễn phí)', 0, 10737418240, ?)`
     )
     .bind(userId, now)
     .run();
@@ -257,9 +257,9 @@ export default {
           id: userId,
           email: u?.email ?? "mr.trinhhao@gmail.com",
           name: u?.name ?? "Trịnh Hảo",
-          plan: u?.plan ?? "Pro 2 TB",
+          plan: u?.plan ?? "Cloudflare R2 (10 GB Miễn phí)",
           storageUsed: u?.storage_used ?? 0,
-          storageLimit: u?.storage_limit ?? 2_199_023_255_552,
+          storageLimit: u?.storage_limit ?? 10_737_418_240,
         });
       }
 
@@ -270,6 +270,10 @@ export default {
           .bind(userId)
           .first<{ used: number; cnt: number }>();
 
+        const u = await env.DB.prepare("SELECT * FROM users WHERE id = ?")
+          .bind(userId)
+          .first<any>();
+
         const usedBytes = stats?.used ?? 0;
         await env.DB.prepare("UPDATE users SET storage_used = ? WHERE id = ?")
           .bind(usedBytes, userId)
@@ -277,10 +281,24 @@ export default {
 
         return jsonResponse({
           usedBytes,
-          limitBytes: 2_199_023_255_552,
-          plan: "Pro 2 TB",
+          limitBytes: u?.storage_limit ?? 10_737_418_240,
+          plan: u?.plan ?? "Cloudflare R2 (10 GB Miễn phí)",
           fileCount: stats?.cnt ?? 0,
         });
+      }
+
+      if ((path === "user/plan" || path === "quota/plan") && (method === "POST" || method === "PATCH")) {
+        const body = (await request.json()) as any;
+        const limitBytes = Number(body.limitBytes ?? 10_737_418_240);
+        const plan = String(body.plan ?? "Cloudflare R2 (10 GB Miễn phí)");
+        await ensureDefaultUser(env.DB, userId);
+        await env.DB.prepare(
+          "UPDATE users SET storage_limit = ?, plan = ? WHERE id = ?"
+        )
+          .bind(limitBytes, plan, userId)
+          .run();
+
+        return jsonResponse({ ok: true, limitBytes, plan });
       }
 
       // 3. Directory Listing, All Files, Path Lookup & Delta Changes

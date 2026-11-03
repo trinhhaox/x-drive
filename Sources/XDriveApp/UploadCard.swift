@@ -17,7 +17,7 @@ public struct FileDropArea: View {
             Image(systemName: isTargeted ? "arrow.down.doc.fill" : "icloud.and.arrow.up.fill")
                 .font(.system(size: 30))
                 .foregroundStyle(isTargeted ? .green : .blue)
-            Text("Kéo và thả tệp vào đây để tải lên /Volumes/Helumi")
+            Text("Kéo và thả tệp vào đây để tải lên /Volumes/XDrive")
                 .font(.subheadline.weight(.semibold))
             Text(model.privacyState == .off
                  ? "Tệp sẽ được ghi qua Staging & đồng bộ qua 2 làn ưu tiên (Small/Big Lanes)"

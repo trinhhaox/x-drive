@@ -5,7 +5,7 @@ compatibility_date = "2025-02-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "xdrive-metadata"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "34fdfeff-b268-442c-8c35-f3c4927c194a"
 
 [[r2_buckets]]
 binding = "BUCKET"

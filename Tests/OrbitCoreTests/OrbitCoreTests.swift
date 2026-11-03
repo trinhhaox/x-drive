@@ -6,13 +6,13 @@ final class OrbitCoreTests: XCTestCase {
 
     // MARK: - 1. Zero-Knowledge E2EE Cryptography (OrbitCore.ZK) Tests
 
-    func testZKConstantsMatchHelumiBinary() {
+    func testZKConstantsMatchXDriveBinary() {
         XCTAssertEqual(ZK.piece, 1_048_576, "ZK.piece must be exactly 1 MiB")
         XCTAssertEqual(ZK.tag, 16, "ZK.tag must be 16 bytes (128-bit GCM tag)")
         XCTAssertEqual(ZK.shareKeyBytes, 16, "ZK.shareKeyBytes must be 16 bytes")
         XCTAssertEqual(ChunkStore.defaultChunkSize, 1_048_576, "ChunkStore.defaultChunkSize must be 1 MiB")
         XCTAssertEqual(MountHelper.version, 6)
-        XCTAssertEqual(MountHelper.mountPoint, "/Volumes/Helumi")
+        XCTAssertEqual(MountHelper.mountPoint, "/Volumes/XDrive")
         XCTAssertEqual(MountHelper.fileSystemType, "OrbitFS")
     }
 
@@ -312,6 +312,56 @@ final class OrbitCoreTests: XCTestCase {
             GitHubUpdateVerifier.expectedSHA256(for: "XDrive-0.3.14-macos-arm64.zip", in: sumsContent),
             expectedHex
         )
+    }
+
+    func testGoogleDriveRemoteAndMultiCloudProxySwitching() async throws {
+        // 1. Google Drive Remote Simulation & Operations
+        let gdrive = GoogleDriveRemote()
+        XCTAssertFalse(gdrive.isConfiguredWithLiveCredentials)
+
+        let (usr, quota) = try await gdrive.fetchAboutAndQuota()
+        XCTAssertTrue(quota.limitBytes > 0)
+        XCTAssertFalse(usr.email.isEmpty)
+
+        let gdir = try await gdrive.createDirectory(name: "Tai-Lieu-Google", parentID: nil)
+        XCTAssertEqual(gdir.name, "Tai-Lieu-Google")
+        XCTAssertTrue(gdir.isDirectory)
+
+        let uploadData = Data("Google Drive Test Content 12345\n".utf8)
+        let source = MemoryBlobSource(data: uploadData)
+        let uploadResult = try await gdrive.uploadFile(
+            existingRemoteID: nil,
+            name: "test-gdrive.txt",
+            parentID: gdir.id,
+            source: source,
+            createdAt: nil,
+            modifiedAt: nil,
+            onProgress: nil
+        )
+        XCTAssertFalse(uploadResult.id.isEmpty)
+
+        let readSlice = try await gdrive.fetchRange(remoteID: uploadResult.id, range: 0..<UInt64(uploadData.count))
+        XCTAssertEqual(readSlice, uploadData)
+
+        // 2. MultiCloudProxyRemote Dynamic Switching between Cloudflare and Google Drive
+        let cloudflareBackend = OrbitAPI(baseURL: URL(string: "http://127.0.0.1:8787")!)
+        let proxy = MultiCloudProxyRemote(
+            initialProvider: .googleDrive,
+            cloudflareBackend: cloudflareBackend,
+            googleDriveBackend: gdrive
+        )
+
+        XCTAssertEqual(proxy.currentProvider, .googleDrive)
+        let gItems = try await proxy.listDirectory(parentID: nil)
+        XCTAssertTrue(gItems.contains(where: { $0.id == gdir.id }))
+
+        // Switch to Cloudflare Provider
+        proxy.setProvider(.cloudflare)
+        XCTAssertEqual(proxy.currentProvider, .cloudflare)
+
+        // Switch back to Google Drive Provider
+        proxy.setProvider(.googleDrive)
+        XCTAssertEqual(proxy.currentProvider, .googleDrive)
     }
 }
 

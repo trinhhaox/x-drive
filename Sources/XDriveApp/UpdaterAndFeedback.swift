@@ -431,6 +431,11 @@ public struct FeedbackView: View {
             component: "UserFeedback:\(category)",
             message: message
         )
+        if let apiURL = URL(string: model.apiEndpointURL) {
+            Task {
+                _ = try? await ErrorReporter.shared.uploadReports(to: apiURL)
+            }
+        }
         message = ""
         submittedBanner = true
         model.refreshErrorReports()

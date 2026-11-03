@@ -72,7 +72,7 @@ public struct FloatingSearchPanelView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.title2)
                     .foregroundStyle(.secondary)
-                TextField("Tìm nhanh tệp trên /Volumes/Helumi (↑↓ chọn, Enter mở, Esc đóng)...", text: $model.searchQuery)
+                TextField("Tìm nhanh tệp trên /Volumes/XDrive (↑↓ chọn, Enter mở, Esc đóng)...", text: $model.searchQuery)
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .onChange(of: model.searchQuery) { _, _ in

@@ -40,7 +40,7 @@ public enum WelcomeStep: Int, CaseIterable, Identifiable {
     public var subtitle: String {
         switch self {
         case .virtualDrive:
-            return "Truy cập hàng Terabyte dữ liệu tại /Volumes/Helumi mà không chiếm dụng ổ cứng Mac. Bộ đệm khối 1 MiB phát trực tuyến tức thì."
+            return "Truy cập hàng Terabyte dữ liệu tại /Volumes/XDrive mà không chiếm dụng ổ cứng Mac. Bộ đệm khối 1 MiB phát trực tuyến tức thì."
         case .zeroKnowledge:
             return "Mọi tệp tin và tên thư mục được khóa bằng AES-256-GCM trên máy Mac của bạn trước khi lên mây. Chỉ thiết bị được bạn phê duyệt qua P-256 ECDH mới đọc được."
         case .politeUploads:
@@ -152,7 +152,7 @@ public struct SignInView: View {
             Text("Đăng nhập vào XDrive")
                 .font(.title.bold())
 
-            Text("Kết nối tài khoản đám mây Orbit để gắn kết ổ đĩa /Volumes/Helumi")
+            Text("Kết nối tài khoản đám mây Orbit để gắn kết ổ đĩa /Volumes/XDrive")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
