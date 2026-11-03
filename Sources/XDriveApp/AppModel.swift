@@ -8,6 +8,7 @@ public final class AppModel: ObservableObject {
         case search = "Tìm kiếm"
         case privacy = "Bảo mật E2EE"
         case settings = "Cài đặt"
+        case feedback = "Phản hồi"
 
         public var id: String { rawValue }
         public var icon: String {
@@ -16,11 +17,13 @@ public final class AppModel: ObservableObject {
             case .search: return "magnifyingglass"
             case .privacy: return "lock.shield.fill"
             case .settings: return "gearshape.fill"
+            case .feedback: return "bubble.left.and.exclamationmark.bubble.right.fill"
             }
         }
     }
 
     @Published public var selectedTab: SidebarTab = .home
+    @Published public var showWelcomeSheet: Bool = false
     @Published public var isSignedIn: Bool = true
     @Published public var user: UserInfo = UserInfo(
         id: "usr_trinhhao",
@@ -46,8 +49,10 @@ public final class AppModel: ObservableObject {
     @Published public var cacheLimitGB: Double = 10.0
     @Published public var politeUploads: Bool = true
     @Published public var pendingApprovals: [PendingDeviceApproval] = []
+    @Published public var activeApprovalSheetRequest: PendingDeviceApproval?
     @Published public var simulatedMatchCode: String = "482 915"
     @Published public var lastCopiedShareURL: String?
+    @Published public var recentErrorReports: [ErrorReportPayload] = []
 
     public let localBackend = LocalWireRemote()
     public let keyManager = KeyManager(
@@ -59,6 +64,8 @@ public final class AppModel: ObservableObject {
     public let driveController = DriveController()
     public let searchIndex = SearchIndex()
     public let browserSignIn = BrowserSignIn()
+    public let updater = Updater()
+    public let deviceNotifier = DeviceNotifier()
     public private(set) var searchPanelController: SearchPanelController?
     private var ejectWatcher: EjectWatcher?
 
@@ -75,11 +82,32 @@ public final class AppModel: ObservableObject {
         self.ejectWatcher = EjectWatcher { [weak self] in
             self?.driveController.refreshState()
         }
+        self.recentErrorReports = ErrorReporter.shared.latestReports()
 
         Task {
             await bootstrapInitialFilesIfNeeded()
             refreshSnapshot()
         }
+    }
+
+    public func completeWelcomeOnboarding() {
+        showWelcomeSheet = false
+    }
+
+    public func signInWithCredentials(email: String) {
+        user = UserInfo(
+            id: "usr_\(email.prefix(8))",
+            email: email,
+            name: email.components(separatedBy: "@").first?.capitalized ?? "User",
+            plan: "Pro 2 TB",
+            storageUsed: quota.usedBytes,
+            storageLimit: quota.limitBytes
+        )
+        isSignedIn = true
+    }
+
+    public func refreshErrorReports() {
+        recentErrorReports = ErrorReporter.shared.latestReports()
     }
 
     public func toggleFloatingSearchPanel() {
@@ -143,6 +171,7 @@ public final class AppModel: ObservableObject {
         privacyState = keyManager.state
         searchIndex.rebuild(from: drive.tree)
         performSearch()
+        refreshErrorReports()
     }
 
     public func performSearch() {
@@ -215,21 +244,34 @@ public final class AppModel: ObservableObject {
         let pubB64 = ZK.base64URLEncode(devPriv.publicKey.x963Representation)
         let reqID = "dev_\(UUID().uuidString.prefix(8))"
         simulatedMatchCode = ZK.matchCode(deviceID: reqID, publicKey: pubB64)
-        pendingApprovals = [
-            PendingDeviceApproval(
-                id: reqID,
-                deviceName: "MacBook Pro 16-inch (M4 Max)",
-                publicKey: pubB64,
-                createdAt: Int64(Date().timeIntervalSince1970),
-                expiresAt: Int64(Date().addingTimeInterval(600).timeIntervalSince1970)
-            )
-        ]
+        let request = PendingDeviceApproval(
+            id: reqID,
+            deviceName: "MacBook Pro 16-inch (M4 Max)",
+            publicKey: pubB64,
+            createdAt: Int64(Date().timeIntervalSince1970),
+            expiresAt: Int64(Date().addingTimeInterval(600).timeIntervalSince1970)
+        )
+        pendingApprovals = [request]
+        activeApprovalSheetRequest = request
+        deviceNotifier.presentApprovalSheet(for: request)
     }
 
     public func approvePendingDevice(_ item: PendingDeviceApproval) {
         guard let master = keyManager.masterKey else { return }
         _ = try? ZK.grantForDevice(master: master, peerPublic: item.publicKey, deviceID: item.id)
         pendingApprovals.removeAll { $0.id == item.id }
+        if activeApprovalSheetRequest?.id == item.id {
+            activeApprovalSheetRequest = nil
+        }
+        deviceNotifier.dismiss()
+    }
+
+    public func rejectPendingDevice(_ item: PendingDeviceApproval) {
+        pendingApprovals.removeAll { $0.id == item.id }
+        if activeApprovalSheetRequest?.id == item.id {
+            activeApprovalSheetRequest = nil
+        }
+        deviceNotifier.dismiss()
     }
 
     public func clearCache() {

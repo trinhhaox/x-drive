@@ -245,5 +245,21 @@ final class OrbitCoreTests: XCTestCase {
         gov.recordRTT(milliseconds: 240.0)
         XCTAssertTrue(gov.isThrottling, "UploadGovernor must throttle when RTT spikes above baseline")
     }
+
+    func testErrorReporterAndXattrStoreRoundTrip() throws {
+        ErrorReporter.shared.clearQueue()
+        ErrorReporter.shared.report(component: "OrbitFS", message: "Simulated FSKit mount diagnostic")
+        let reports = ErrorReporter.shared.latestReports()
+        XCTAssertEqual(reports.count, 1)
+        XCTAssertEqual(reports.first?.component, "OrbitFS")
+
+        let xattrs = XattrStore()
+        let sampleTag = Data("com.apple.FinderInfo.Tag".utf8)
+        xattrs.set(nodeID: 42, name: "com.apple.FinderInfo", value: sampleTag)
+        XCTAssertEqual(xattrs.get(nodeID: 42, name: "com.apple.FinderInfo"), sampleTag)
+        XCTAssertEqual(xattrs.list(nodeID: 42), ["com.apple.FinderInfo"])
+        xattrs.set(nodeID: 42, name: "com.apple.FinderInfo", value: nil)
+        XCTAssertNil(xattrs.get(nodeID: 42, name: "com.apple.FinderInfo"))
+    }
 }
 

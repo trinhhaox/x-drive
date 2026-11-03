@@ -3,7 +3,8 @@ import MetricKit
 
 // MARK: - ErrorReportPayload & ErrorReporter
 
-public struct ErrorReportPayload: Codable, Equatable, Sendable {
+public struct ErrorReportPayload: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
     public var component: String
     public var code: String
     public var message: String
@@ -12,13 +13,15 @@ public struct ErrorReportPayload: Codable, Equatable, Sendable {
     public var details: [String: String]
 
     public init(
+        id: String = UUID().uuidString,
         component: String,
-        code: String,
+        code: String = "diagnostic",
         message: String,
         appVersion: String = "0.3.13",
         osVersion: String = ProcessInfo.processInfo.operatingSystemVersionString,
         details: [String: String] = [:]
     ) {
+        self.id = id
         self.component = component
         self.code = code
         self.message = message
@@ -35,7 +38,7 @@ public final class ErrorReporter: @unchecked Sendable {
 
     public init() {}
 
-    public func report(component: String, code: String, message: String, details: [String: String] = [:]) {
+    public func report(component: String, code: String = "diagnostic", message: String, details: [String: String] = [:]) {
         let payload = ErrorReportPayload(
             component: component,
             code: code,
@@ -52,6 +55,10 @@ public final class ErrorReporter: @unchecked Sendable {
 
     public func latestReports() -> [ErrorReportPayload] {
         lock.withLock { recentReports }
+    }
+
+    public func clearQueue() {
+        lock.withLock { recentReports.removeAll() }
     }
 }
 

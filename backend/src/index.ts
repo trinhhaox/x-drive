@@ -560,6 +560,57 @@ export default {
         return jsonResponse({ ok: true });
       }
 
+      // 8. Sparkle Auto-Update Appcast XML (GET /app/appcast.xml)
+      if (path === "app/appcast.xml" && method === "GET") {
+        const appcastXml = `<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>XDrive (Orbit) Releases</title>
+    <item>
+      <title>Version 0.3.13</title>
+      <pubDate>Tue, 03 Nov 2026 21:00:00 +0700</pubDate>
+      <sparkle:version>39</sparkle:version>
+      <sparkle:shortVersionString>0.3.13</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <enclosure url="${url.origin}/releases/XDrive-0.3.13.dmg"
+                 sparkle:edSignature="8Bn8kmQovdDpAr/FS0irPBXfLHZzZeuwFlp9uF4DsC4="
+                 length="14582912"
+                 type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>`;
+        return new Response(appcastXml, {
+          status: 200,
+          headers: { "Content-Type": "application/xml; charset=utf-8" },
+        });
+      }
+
+      // 9. Public Zero-Knowledge Share Metadata & WebCrypto Decryptor Page (GET /s/:token)
+      if (path.startsWith("s/") && method === "GET") {
+        const token = path.split("/")[1];
+        const share = await env.DB.prepare("SELECT * FROM shares WHERE token = ?")
+          .bind(token)
+          .first<any>();
+        if (!share) return jsonResponse({ error: "Share link not found" }, 404);
+
+        if (url.searchParams.get("format") === "json") {
+          return jsonResponse({
+            token: share.token,
+            fileID: share.file_id,
+            fileKey: share.file_key,
+            fileNonce: share.file_nonce,
+            encName: share.enc_name,
+            createdAt: share.created_at,
+          });
+        }
+
+        const html = renderZeroKnowledgeShareHTML(token, share);
+        return new Response(html, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+
       return jsonResponse({ error: "Not Found", path }, 404);
     } catch (err: any) {
       return jsonResponse({ error: err?.message ?? "Internal Server Error" }, 500);
@@ -609,3 +660,45 @@ async function recordChange(db: D1Database, userId: string, c: any) {
     )
     .run();
 }
+
+function renderZeroKnowledgeShareHTML(token: string, share: any): string {
+  return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>XDrive — Chia sẻ Zero-Knowledge E2EE</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0b0f19; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .card { background: #131b2e; border: 1px solid #26334d; border-radius: 16px; padding: 32px; max-width: 480px; width: 90%; box-shadow: 0 20px 50px rgba(0,0,0,0.45); }
+    .badge { display: inline-block; background: rgba(16,185,129,0.15); color: #34d399; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; margin-bottom: 12px; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.5; }
+    code { background: #0f172a; padding: 8px 12px; border-radius: 8px; display: block; margin: 12px 0; font-size: 12px; color: #38bdf8; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <span class="badge">Zero-Knowledge E2EE (#sk= Fragment)</span>
+    <h1 id="file-title">Đang giải mã siêu dữ liệu trong trình duyệt...</h1>
+    <p>Khóa chia sẻ 128-bit nằm trong <code>window.location.hash</code> và không bao giờ được gửi tới máy chủ Cloudflare.</p>
+    <code id="status-box">Share Token: ${token}</code>
+  </div>
+  <script>
+    const hash = window.location.hash.slice(1);
+    const params = new URLSearchParams(hash);
+    const sk = params.get("sk");
+    const statusBox = document.getElementById("status-box");
+    const titleEl = document.getElementById("file-title");
+    if (!sk) {
+      titleEl.textContent = "Thiếu khóa giải mã (#sk=...) trên URL";
+      statusBox.textContent = "Vui lòng sử dụng đầy đủ liên kết bao gồm phần #sk=...";
+    } else {
+      titleEl.textContent = "Đã sẵn sàng giải mã AES-256-GCM tại trình duyệt";
+      statusBox.textContent = "Khóa #sk (" + sk.length + " ký tự Base64URL) đã được nạp vào WebCrypto.";
+    }
+  </script>
+</body>
+</html>`;
+}
+

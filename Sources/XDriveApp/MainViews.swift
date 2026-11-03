@@ -35,19 +35,31 @@ public struct MainWindowView: View {
                 .padding(12)
             }
         } detail: {
-            Group {
-                switch model.selectedTab {
-                case .home:
-                    HomeDashboardView(model: model)
-                case .search:
-                    SpotlightSearchView(model: model)
-                case .privacy:
-                    ZeroKnowledgePrivacyView(model: model)
-                case .settings:
-                    DriveSettingsView(model: model)
+            if !model.isSignedIn {
+                SignInView(model: model)
+            } else {
+                Group {
+                    switch model.selectedTab {
+                    case .home:
+                        HomeDashboardView(model: model)
+                    case .search:
+                        SpotlightSearchView(model: model)
+                    case .privacy:
+                        ZeroKnowledgePrivacyView(model: model)
+                    case .settings:
+                        DriveSettingsView(model: model)
+                    case .feedback:
+                        FeedbackView(model: model)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .sheet(isPresented: $model.showWelcomeSheet) {
+            WelcomeView(model: model)
+        }
+        .sheet(item: $model.activeApprovalSheetRequest) { req in
+            AllowDeviceSheet(model: model, request: req)
         }
         .frame(minWidth: 780, minHeight: 520)
     }
@@ -428,6 +440,31 @@ public struct DriveSettingsView: View {
                     get: { model.politeUploads },
                     set: { model.updatePoliteUploads($0) }
                 ))
+            }
+
+            Section("Cập nhật Tự động (Sparkle Appcast EdDSA) & Tài khoản") {
+                HStack {
+                    Text(model.updater.statusMessage)
+                        .font(.callout)
+                    Spacer()
+                    Button("Kiểm tra Cập nhật") {
+                        Task {
+                            await model.updater.checkForUpdates()
+                        }
+                    }
+                    .disabled(model.updater.isChecking)
+                }
+
+                HStack {
+                    Button("Xem lại Hướng dẫn Onboarding") {
+                        model.showWelcomeSheet = true
+                    }
+                    Spacer()
+                    Button("Đăng xuất (\(model.user.email))") {
+                        model.isSignedIn = false
+                    }
+                    .foregroundStyle(.red)
+                }
             }
         }
         .formStyle(.grouped)
