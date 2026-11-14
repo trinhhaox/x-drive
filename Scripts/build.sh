@@ -46,10 +46,11 @@ else
     echo "🔒 Đang ký ứng dụng bằng tài khoản Apple Developer: $SIGN_IDENTITY"
 fi
 
-codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Extensions/OrbitFS.appex"
+codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" --entitlements "$PROJECT_DIR/Resources/OrbitFS.entitlements" "$APP_BUNDLE/Contents/Extensions/OrbitFS.appex"
 codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" --entitlements "$PROJECT_DIR/Resources/OrbitFinder.entitlements" "$APP_BUNDLE/Contents/PlugIns/OrbitFinder.appex"
 codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/MacOS/OrbitMountHelper"
-codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+# Không dùng --deep: nó ký lại các extension và xoá entitlements sandbox của chúng.
+codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" --entitlements "$PROJECT_DIR/Resources/XDrive-DeveloperID.entitlements" "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
 echo "✅ Đã xác minh tính toàn vẹn chữ ký thành công:"
 codesign -dvvv "$APP_BUNDLE" 2>&1 | grep -E "Authority|TeamIdentifier|Identifier"

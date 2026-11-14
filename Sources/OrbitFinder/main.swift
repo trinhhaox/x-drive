@@ -147,3 +147,9 @@ if CommandLine.arguments.contains("--self-test") {
     exit(0)
 }
 
+// Hand control to the extension host; without this the process exits as soon as
+// Finder launches it and no badges or menus ever appear.
+@_silgen_name("NSExtensionMain")
+private func NSExtensionMain(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> Int32
+
+exit(NSExtensionMain(CommandLine.argc, CommandLine.unsafeArgv))

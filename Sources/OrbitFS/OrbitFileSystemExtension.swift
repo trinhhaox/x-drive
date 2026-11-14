@@ -1,5 +1,6 @@
 import Foundation
 import FSKit
+import ExtensionFoundation
 import OrbitCore
 
 // MARK: - OrbitFSItem (Native FSKit vnode Item)
@@ -630,13 +631,16 @@ public final class OrbitFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperatio
     }
 }
 
-// Entrypoint
-if CommandLine.arguments.contains("--self-test") {
-    if #available(macOS 15.4, *) {
-        let fs = OrbitFileSystem()
-        print("OrbitFS native FSKit FSUnaryFileSystem initialized cleanly: \(fs)")
-    }
-    exit(0)
-}
+// MARK: - Entry point
+// FSKit loads the module through ExtensionKit, so the extension must be an
+// `@main` UnaryFileSystemExtension; a bare run loop never registers with FSKit.
 
-RunLoop.current.run()
+@available(macOS 15.4, *)
+@main
+struct OrbitFileSystemExtension: UnaryFileSystemExtension {
+    private static let sharedFileSystem = OrbitFileSystem()
+
+    var fileSystem: FSUnaryFileSystem & FSUnaryFileSystemOperations {
+        Self.sharedFileSystem
+    }
+}
