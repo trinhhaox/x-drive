@@ -617,6 +617,9 @@ public final class OrbitFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperatio
             ownerGID: gid
         )
         self.activeVolume = volume
+        // FSKit rejects the load (EAGAIN, "unexpected container state") unless the
+        // container is marked ready before replying.
+        containerStatus = .ready
         reply(volume, nil)
     }
 
