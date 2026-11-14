@@ -137,7 +137,6 @@ public struct SignInView: View {
     @ObservedObject var model: AppModel
     @State private var email: String = "mr.trinhhao@gmail.com"
     @State private var password: String = ""
-    @State private var isAuthenticating: Bool = false
 
     public init(model: AppModel) {
         self.model = model
@@ -171,24 +170,6 @@ public struct SignInView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
-                Button {
-                    isAuthenticating = true
-                    model.browserSignIn.startSignIn { _ in
-                        Task { @MainActor in
-                            isAuthenticating = false
-                            model.signInWithCredentials(email: email)
-                        }
-                    }
-                } label: {
-                    Label(
-                        isAuthenticating ? "Đang chờ trình duyệt OAuth2 PKCE..." : "Đăng nhập qua Trình duyệt (OAuth2 PKCE)",
-                        systemImage: "safari.fill"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(isAuthenticating)
             }
             .frame( width: 340)
 

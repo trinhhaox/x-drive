@@ -97,7 +97,6 @@ public final class AppModel: ObservableObject {
     public let drive: OrbitDrive
     public let driveController = DriveController()
     public let searchIndex = SearchIndex()
-    public let browserSignIn = BrowserSignIn()
     public let updater = Updater()
     public let deviceNotifier = DeviceNotifier()
     public private(set) var searchPanelController: SearchPanelController?
