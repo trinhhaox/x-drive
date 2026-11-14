@@ -30,13 +30,12 @@ final class Helper: NSObject, NSXPCListenerDelegate, MountHelperProtocol {
             return
         }
 
-        let options = "u=\(uid),g=\(gid)"
         var lastError = "Không thể gắn kết ổ đĩa OrbitFS."
 
         for resource in MountHelper.resources(startingWith: MountHelper.resource) {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/sbin/mount")
-            proc.arguments = ["-t", MountHelper.fileSystemType, "-o", options, resource, mountPath]
+            proc.arguments = ["-F", "-t", MountHelper.fileSystemType, "-u", "\(uid)", "-g", "\(gid)", resource, mountPath]
             let errPipe = Pipe()
             proc.standardError = errPipe
 

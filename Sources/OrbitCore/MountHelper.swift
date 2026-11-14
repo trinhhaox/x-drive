@@ -18,8 +18,8 @@ public enum MountHelper {
     public static let fileSystemType: String = "OrbitFS"
     public static let machService: String = "vn.xox.xdrive.MountHelper"
     public static let plistName: String = "vn.xox.xdrive.MountHelper.plist"
-    public static let resource: String = "xdrive"
-    public static let resources: [String] = ["xdrive", "orbit", "orbitfs"]
+    public static let resource: String = "xdrive://drive"
+    public static let resources: [String] = ["xdrive://drive"]
 
     public static var mountPointURL: URL {
         URL(fileURLWithPath: mountPoint, isDirectory: true)

@@ -32,7 +32,10 @@ let package = Package(
         .executableTarget(
             name: "OrbitFS",
             dependencies: ["OrbitCore"],
-            path: "Sources/OrbitFS"
+            path: "Sources/OrbitFS",
+            // Xcode links ExtensionKit extensions with this entry point; it sets up the
+            // extension type before running @main. Without it ExtensionFoundation traps.
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-e", "-Xlinker", "_NSExtensionMain"])]
         ),
         .executableTarget(
             name: "OrbitFinder",
