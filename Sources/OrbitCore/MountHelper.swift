@@ -95,6 +95,11 @@ public final class DriveController: ObservableObject {
 
         state = .mounting(.preparing)
 
+        if await FileSystemModuleStatus.isDisabled() {
+            state = .NeedsExtensionApproval
+            return
+        }
+
         // 1. Try launching through LaunchDaemon via SMAppService if registered
         let daemonService = SMAppService.daemon(plistName: MountHelper.plistName)
         if daemonService.status == .enabled {

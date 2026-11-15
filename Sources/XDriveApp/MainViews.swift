@@ -103,6 +103,7 @@ public struct MainWindowView: View {
         switch model.driveController.state {
         case .mounted: return "Đã gắn /Volumes/XDrive"
         case .mounting: return "Đang gắn ổ đĩa..."
+        case .NeedsExtensionApproval: return "Cần bật OrbitFS"
         default: return "Chưa gắn kết"
         }
     }
@@ -116,6 +117,8 @@ public struct HomeDashboardView: View {
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                FileSystemExtensionBanner(driveController: model.driveController)
+
                 // Header Banner
                 HStack(spacing: 16) {
                     Image(systemName: "externaldrive.fill.badge.icloud")
